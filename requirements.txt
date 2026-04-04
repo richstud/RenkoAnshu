@@ -1,0 +1,6 @@
+fastapi
+uvicorn[standard]
+pydantic
+MetaTrader5
+supabase
+python-dotenv
