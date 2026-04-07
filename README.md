@@ -70,6 +70,22 @@ npm run dev
 2. Red brick => close buy + open sell at brick low
 3. Each account processes ticks and reverses positions
 
+## Signal Generation
+
+The system uses a unified signal generation interface via the `signals` module:
+
+```python
+from backend.signals import get_signal
+
+# Get trading signal for a symbol at a given price
+signal = get_signal('XAUUSD', 2350.50)  # Returns 'BUY', 'SELL', or None
+```
+
+Signals are generated based on Renko brick formations:
+- **BUY**: Green brick formed (uptrend)
+- **SELL**: Red brick formed (downtrend)
+- **None**: No complete brick yet, or same direction as current position
+
 ## Lot sizing
 
 - balance < 500 => 0.01
@@ -80,6 +96,9 @@ npm run dev
 
 - POST `/start-bot`
 - POST `/stop-bot`
+- GET `/signal/{symbol}/{price}` - Get trading signal for a symbol at a given price
+- POST `/reset-signal/{symbol}` - Reset signal generator for a symbol
+- POST `/accounts` { login, password, server }
 - GET `/accounts`
 - GET `/trades`
 - GET `/logs`

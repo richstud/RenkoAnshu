@@ -1,69 +1,113 @@
 import asyncio
 import logging
-from typing import Dict
 
 import MetaTrader5 as mt5
 
 from backend.config import settings
 from backend.execution.trade import place_buy, place_sell
 from backend.mt5.connection import mt5_manager
-from backend.renko.engine import RenkoEngine
-from backend.strategy.engine import StrategyEngine
+from backend.signals import signal_generator
 from backend.supabase.client import supabase_client
 
 logger = logging.getLogger("worker")
 
+
 class BotWorker:
     def __init__(self):
-        self.active = False
-        self.renko_engine: Dict[int, RenkoEngine] = {}
-        self.strategy_engine: Dict[int, StrategyEngine] = {}
+        self.last_signal = {}  # 🔥 Prevent duplicate trades
+
+    # 🔥 Fetch watchlist from Supabase
+    def get_watchlist(self):
+        try:
+            response = supabase_client.table("watchlist").select("*").execute()
+            return response.data or []
+        except Exception as e:
+            logger.error(f"Error fetching watchlist: {e}")
+            return []
+
+    # 🔥 Check bot status from DB (UI controlled)
+    def is_bot_running(self):
+        try:
+            response = supabase_client.table("bot_control").select("*").limit(1).execute()
+            if response.data:
+                return response.data[0].get("is_running", False)
+            return False
+        except Exception as e:
+            logger.error(f"Error fetching bot control: {e}")
+            return False
 
     async def start(self):
-        self.active = True
+        signal_generator.set_brick_size(settings.RENKO_BRICK_SIZE)
         mt5_manager.connect_all()
 
-        while self.active:
+        while True:
+            # 🔥 UI control via Supabase
+            if not self.is_bot_running():
+                await asyncio.sleep(1)
+                continue
+
             await self.cycle()
             await asyncio.sleep(settings.POLL_INTERVAL)
 
     async def stop(self):
-        self.active = False
         mt5_manager.disconnect_all()
 
     async def cycle(self):
+        watchlist = self.get_watchlist()
+
+        if not watchlist:
+            logger.warning("Watchlist empty")
+            return
+
         for login, session in mt5_manager.sessions.items():
-            try:
-                session.ensure_connected()
-                symbol = settings.SYMBOL
+            for symbol_data in watchlist:
+                try:
+                    # 🔥 Skip inactive symbols
+                    if not symbol_data.get("is_active", True):
+                        continue
 
-                tick = mt5.symbol_info_tick(symbol)
-                if tick is None:
-                    logger.warning(f"No tick for {symbol}")
-                    continue
+                    symbol = symbol_data["symbol"]
+                    lot_size = float(symbol_data.get("lot_size", 0.01))
 
-                price = float(tick.last)
+                    session.ensure_connected()
 
-                if login not in self.renko_engine:
-                    self.renko_engine[login] = RenkoEngine(brick_size=settings.RENKO_BRICK_SIZE)
-                    self.strategy_engine[login] = StrategyEngine(self.renko_engine[login])
+                    tick = mt5.symbol_info_tick(symbol)
+                    if tick is None:
+                        logger.warning(f"No tick for {symbol}")
+                        continue
 
-                strategy = self.strategy_engine[login]
-                signal = strategy.process_tick(price)
+                    # 🔥 Use ASK price for trading
+                    price = float(tick.ask)
 
-                if signal:
-                    if signal["type"] == "buy":
-                        place_buy(session, symbol, signal["price"])
-                        self.log_event(login, "buy_executed")
-                    elif signal["type"] == "sell":
-                        place_sell(session, symbol, signal["price"])
-                        self.log_event(login, "sell_executed")
+                    signal = signal_generator.get_signal(symbol, price)
 
-            except Exception as exc:
-                logger.exception(f"Error on account {login}: {exc}")
-                self.log_event(login, f"error:{exc}")
+                    # 🔥 Prevent duplicate trades
+                    if signal == self.last_signal.get(symbol):
+                        continue
 
-    def log_event(self, account_id: int, event: str, latency: float = 0.0):
-        supabase_client.table("logs").insert({"account_id": account_id, "event": event, "latency": latency}).execute()
+                    if signal == "BUY":
+                        place_buy(session, symbol, price, lot_size)
+                        self.log_event(login, f"BUY_{symbol}")
+
+                    elif signal == "SELL":
+                        place_sell(session, symbol, price, lot_size)
+                        self.log_event(login, f"SELL_{symbol}")
+
+                    # 🔥 Store last signal
+                    self.last_signal[symbol] = signal
+
+                except Exception as exc:
+                    logger.exception(f"Error on account {login}, symbol {symbol}: {exc}")
+                    self.log_event(login, f"error:{symbol}:{exc}")
+
+    def log_event(self, account_id: int, event: str):
+        try:
+            supabase_client.table("logs").insert({
+                "account_id": account_id,
+                "event": event
+            }).execute()
+        except Exception as e:
+            logger.error(f"Supabase logging failed: {e}")
+
 
 bot_worker = BotWorker()

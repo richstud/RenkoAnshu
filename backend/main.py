@@ -1,15 +1,13 @@
 import asyncio
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from pydantic import BaseModel
 
-from backend.accounts.models import XMAccount
 from backend.config import settings
 from backend.mt5.connection import mt5_manager
-from backend.strategy.engine import StrategyEngine
-from backend.renko.engine import RenkoEngine
+from backend.signals import signal_generator
 from backend.supabase.client import supabase_client
 from backend.worker import bot_worker
 
@@ -48,6 +46,31 @@ async def stop_bot():
         return {"message": "Bot is not running"}
     await bot_worker.stop()
     return {"message": "Bot stopped"}
+
+@app.get("/signal/{symbol}/{price}")
+def get_signal_endpoint(symbol: str, price: float):
+    """Get trading signal for a symbol at a given price."""
+    try:
+        signal = signal_generator.get_signal(symbol, price)
+        brick_info = signal_generator.get_last_brick_info(symbol)
+        return {
+            "symbol": symbol,
+            "price": price,
+            "signal": signal,
+            "brick_info": brick_info,
+        }
+    except Exception as exc:
+        return {
+            "symbol": symbol,
+            "price": price,
+            "error": str(exc),
+        }
+
+@app.post("/reset-signal/{symbol}")
+def reset_signal(symbol: str):
+    """Reset signal generator for a symbol."""
+    signal_generator.reset_symbol(symbol)
+    return {"message": f"Signal generator reset for {symbol}"}
 
 @app.post("/accounts")
 def add_account(account: AccountPayload):
