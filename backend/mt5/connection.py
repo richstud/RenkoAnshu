@@ -20,7 +20,7 @@ class AccountSession:
         if not mt5.initialize(path=settings.MT5_PATH):
             raise RuntimeError(f"MT5 initialize failed: {mt5.last_error()}")
 
-        if not mt5.login(login=self.login, password=self.password, server=self.server):
+        if not mt5.login(int(self.login), password=self.password, server=self.server):
             raise RuntimeError(f"MT5 login failed {self.login}@{self.server}: {mt5.last_error()}")
 
         self.connected = True
