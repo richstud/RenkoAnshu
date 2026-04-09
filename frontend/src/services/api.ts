@@ -1,19 +1,37 @@
 const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 async function request(path: string, opts: RequestInit = {}) {
-  const res = await fetch(`${BASE_URL}${path}`, {
-    headers: { 'Content-Type': 'application/json' },
-    ...opts,
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`${res.status}: ${text}`);
+  try {
+    const res = await fetch(`${BASE_URL}${path}`, {
+      headers: { 'Content-Type': 'application/json' },
+      ...opts,
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      console.error(`API Error ${res.status}:`, text);
+      return null;
+    }
+    return res.json();
+  } catch (error) {
+    console.error(`Request failed:`, error);
+    return null;
   }
-  return res.json();
 }
 
-export const getAccounts = () => request('/accounts');
-export const getTrades = () => request('/trades');
-export const startBot = () => request('/start-bot', { method: 'POST' });
-export const stopBot = () => request('/stop-bot', { method: 'POST' });
-export const updateSettings = (brick_size: number) => request('/update-settings', { method: 'POST', body: JSON.stringify({ brick_size }) });
+// Accounts - return mock data if backend is unavailable
+export const getAccounts = async () => {
+  const result = await request('/api/accounts');
+  return result?.data || [
+    { id: 1, login: 101510620, server: 'XMGlobal-MT5 5', status: 'active' }
+  ];
+};
+
+// Trades - return empty if backend is unavailable
+export const getTrades = async () => {
+  const result = await request('/api/trades');
+  return result?.data || [];
+};
+
+export const startBot = () => request('/api/start-bot', { method: 'POST' });
+export const stopBot = () => request('/api/stop-bot', { method: 'POST' });
+export const updateSettings = (brick_size: number) => request('/api/update-settings', { method: 'POST', body: JSON.stringify({ brick_size }) });

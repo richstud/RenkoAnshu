@@ -4,20 +4,37 @@ import AccountsPanel from './components/AccountsPanel';
 import TradeDashboard from './components/TradeDashboard';
 import Controls from './components/Controls';
 import LogsViewer from './components/LogsViewer';
+import TickersPanel from './components/TickersPanel';
+import WatchlistManager from './components/WatchlistManager';
+import LivePositions from './components/LivePositions';
 
 export type Trade = { id: number; account_id: number; symbol: string; type: string; lot: number; entry_price: number; exit_price?: number; profit?: number; timestamp: string };
 export type Account = { id: number; login: number; server: string; status: string };
 
 function App() {
   const [accounts, setAccounts] = useState<Account[]>([]);
+  const [selectedAccount, setSelectedAccount] = useState<Account | null>(null);
   const [trades, setTrades] = useState<Trade[]>([]);
+  const [watchlistSymbols, setWatchlistSymbols] = useState<string[]>([]);
+  const [watchlistRefresh, setWatchlistRefresh] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [isRunning, setIsRunning] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const load = async () => {
-    setLoading(true);
-    setAccounts(await getAccounts());
-    setTrades(await getTrades());
-    setLoading(false);
+    try {
+      setLoading(true);
+      setError(null);
+      const accs = await getAccounts();
+      const trades = await getTrades();
+      setAccounts(accs || []);
+      setTrades(trades || []);
+    } catch (err) {
+      console.error('Load error:', err);
+      setError(err instanceof Error ? err.message : 'Failed to load data');
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -26,31 +43,116 @@ function App() {
     return () => clearInterval(interval);
   }, []);
 
+  const handleAddToWatchlist = async (symbol: string) => {
+    if (!selectedAccount) {
+      alert('Please select an account first');
+      return;
+    }
+
+    try {
+      const res = await fetch(
+        `${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/watchlist`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            account_id: selectedAccount.login,
+            symbol,
+            lot_size: 0.01,
+            stop_loss_pips: 50,
+            take_profit_pips: 100,
+            trailing_stop_pips: 30,
+            use_trailing_stop: false,
+            brick_size: 1.0,
+            algo_enabled: true,
+          }),
+        }
+      );
+
+      if (res.ok) {
+        setWatchlistSymbols([...watchlistSymbols, symbol]);
+        setWatchlistRefresh(watchlistRefresh + 1);
+      }
+    } catch (error) {
+      console.error('Failed to add to watchlist:', error);
+    }
+  };
+
+  const handleWatchlistUpdate = () => {
+    setWatchlistRefresh(watchlistRefresh + 1);
+  };
+
   return (
-    <div className="min-h-screen p-4 space-y-6">
-      <div className="flex justify-between items-center">
-        <h1 className="text-2xl font-bold">RENKO XAUUSD BOT</h1>
-        <div>{loading ? 'Refreshing…' : ''}</div>
+    <div className="min-h-screen bg-slate-900 text-white p-4">
+      <header className="mb-6">
+        <h1 className="text-4xl font-bold mb-2">🟡 Renko Reversal Gold Bot</h1>
+        <p className="text-slate-400">Automated XAUUSD trading powered by MetaTrader 5</p>
+        {loading && <p className="text-slate-500 text-sm">Refreshing…</p>}
+        {error && <p className="text-red-400 text-sm">Error: {error}</p>}
+      </header>
+
+      <div className="space-y-4">
+        {/* Control Row */}
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
+          <div className="lg:col-span-1">
+            <AccountsPanel 
+              accounts={accounts} 
+              selectedAccount={selectedAccount}
+              onSelectAccount={setSelectedAccount}
+            />
+          </div>
+          <div className="lg:col-span-3">
+            <Controls
+              onStart={async () => {
+                await startBot();
+                setIsRunning(true);
+                load();
+              }}
+              onStop={async () => {
+                await stopBot();
+                setIsRunning(false);
+                load();
+              }}
+              onUpdateSettings={async (brickSize: number) => {
+                await updateSettings(brickSize);
+                load();
+              }}
+            />
+          </div>
+        </div>
+
+        {/* Main Dashboard */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          <div className="lg:col-span-2">
+            {selectedAccount ? (
+              <>
+                <TickersPanel 
+                  onAddToWatchlist={handleAddToWatchlist}
+                  watchlistSymbols={watchlistSymbols}
+                />
+                <div className="mt-4">
+                  <WatchlistManager 
+                    accountId={selectedAccount.login}
+                    onUpdate={handleWatchlistUpdate}
+                  />
+                </div>
+                <div className="mt-4">
+                  <LivePositions accountId={selectedAccount.login} />
+                </div>
+              </>
+            ) : (
+              <div className="bg-slate-800 p-8 rounded-lg text-center text-slate-400">
+                Select an account to start trading
+              </div>
+            )}
+          </div>
+
+          <div className="space-y-4">
+            <TradeDashboard trades={trades} />
+            <LogsViewer />
+          </div>
+        </div>
       </div>
-
-      <Controls
-        onStart={async () => {
-          await startBot();
-          load();
-        }}
-        onStop={async () => {
-          await stopBot();
-          load();
-        }}
-        onUpdateSettings={async (brickSize: number) => {
-          await updateSettings(brickSize);
-          load();
-        }}
-      />
-
-      <AccountsPanel accounts={accounts} />
-      <TradeDashboard trades={trades} />
-      <LogsViewer />
     </div>
   );
 }

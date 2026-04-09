@@ -15,6 +15,8 @@ logger = logging.getLogger("worker")
 class BotWorker:
     def __init__(self):
         self.last_signal = {}  # 🔥 Prevent duplicate trades
+        self.active = False  # Bot running state
+        self._task = None  # Background task
 
     # 🔥 Fetch watchlist from Supabase
     def get_watchlist(self):
@@ -37,10 +39,11 @@ class BotWorker:
             return False
 
     async def start(self):
+        self.active = True
         signal_generator.set_brick_size(settings.RENKO_BRICK_SIZE)
         mt5_manager.connect_all()
 
-        while True:
+        while self.active:
             # 🔥 UI control via Supabase
             if not self.is_bot_running():
                 await asyncio.sleep(1)
@@ -50,6 +53,7 @@ class BotWorker:
             await asyncio.sleep(settings.POLL_INTERVAL)
 
     async def stop(self):
+        self.active = False
         mt5_manager.disconnect_all()
 
     async def cycle(self):
@@ -86,11 +90,11 @@ class BotWorker:
                         continue
 
                     if signal == "BUY":
-                        place_buy(session, symbol, price, lot_size)
+                        place_buy(session, symbol, price)
                         self.log_event(login, f"BUY_{symbol}")
 
                     elif signal == "SELL":
-                        place_sell(session, symbol, price, lot_size)
+                        place_sell(session, symbol, price)
                         self.log_event(login, f"SELL_{symbol}")
 
                     # 🔥 Store last signal

@@ -14,6 +14,7 @@ from backend.worker import bot_worker
 from backend.api.endpoints import router as api_router
 
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Renko Reversal Gold Bot")
 

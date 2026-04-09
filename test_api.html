@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>API Test</title>
+</head>
+<body>
+    <h1>Testing API calls from browser</h1>
+    <div id="output"></div>
+    <script>
+        async function testAPI() {
+            const output = document.getElementById('output');
+            
+            const baseUrl = 'http://localhost:8000';
+            
+            try {
+                output.innerHTML += '<p>Testing /api/accounts...</p>';
+                const response = await fetch(baseUrl + '/api/accounts');
+                output.innerHTML += `<p>Status: ${response.status}</p>`;
+                
+                const data = await response.json();
+                output.innerHTML += `<p>Response: ${JSON.stringify(data, null, 2)}</p>`;
+            } catch (error) {
+                output.innerHTML += `<p style="color: red;">Error: ${error.message}</p>`;
+            }
+        }
+        
+        testAPI();
+    </script>
+</body>
+</html>

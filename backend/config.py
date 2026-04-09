@@ -1,17 +1,31 @@
-from pydantic import BaseSettings
+from pydantic_settings import BaseSettings
+from pydantic import ConfigDict
 
 class Settings(BaseSettings):
-    MT5_PATH: str = ""
+    # Supabase
     SUPABASE_URL: str
     SUPABASE_KEY: str
     SUPABASE_DB_SCHEMA: str = "public"
+    
+    # MT5
+    MT5_PATH: str = ""
+    MT5_LOGIN: str = ""
+    MT5_PASSWORD: str = ""
+    MT5_SERVER: str = ""
+    
+    # Renko Strategy
     RENKO_BRICK_SIZE: float = 1.0
     SYMBOL: str = "XAUUSD"
     POLL_INTERVAL: float = 0.5
+    
+    # Bot Config
     MAX_TRADE_SIDE: int = 1
     environment: str = "development"
+    
+    # API Server
+    API_HOST: str = "0.0.0.0"
+    API_PORT: int = 8000
 
-    class Config:
-        env_file = ".env"
+    model_config = ConfigDict(env_file=".env")
 
 settings = Settings()
