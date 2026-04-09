@@ -1,6 +1,17 @@
 import { useState } from 'react';
 import { executeTrade } from '../services/api';
 
+// Symbol display names mapping
+const SYMBOL_NAMES: Record<string, string> = {
+  'XAUUSD': '🟡 Gold',
+  'EURUSD': '🇪🇺 EUR/USD',
+  'GBPUSD': '🇬🇧 GBP/USD',
+  'USDJPY': '🇺🇸 USD/JPY',
+  'AUDUSD': '🇦🇺 AUD/USD',
+  'NZDUSD': '🇳🇿 NZD/USD',
+  'USDCAD': '🇨🇦 USD/CAD',
+};
+
 interface TradeExecutorProps {
   accountId: number | null;
   availableSymbols: string[];
@@ -15,6 +26,8 @@ export default function TradeExecutor({ accountId, availableSymbols, onSymbolSel
   const [takeProfit, setTakeProfit] = useState<number>();
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  const getSymbolDisplay = (sym: string) => SYMBOL_NAMES[sym] || sym;
 
   const handleSymbolChange = (newSymbol: string) => {
     setSymbol(newSymbol);
@@ -88,18 +101,25 @@ export default function TradeExecutor({ accountId, availableSymbols, onSymbolSel
 
         {/* Symbol Selection */}
         <div>
-          <label className="text-slate-400 text-sm block mb-1">Symbol</label>
+          <label className="text-slate-400 text-sm block mb-1">Select Symbol</label>
           <select
             value={symbol}
             onChange={(e) => handleSymbolChange(e.target.value)}
-            className="w-full px-3 py-2 rounded bg-slate-600 text-white border border-slate-500 focus:border-blue-400 outline-none"
+            className="w-full px-3 py-2 rounded bg-slate-600 text-white border border-slate-500 focus:border-blue-400 outline-none text-sm"
           >
-            {availableSymbols.map((sym) => (
-              <option key={sym} value={sym}>
-                {sym}
-              </option>
-            ))}
+            {availableSymbols.length > 0 ? (
+              availableSymbols.map((sym) => (
+                <option key={sym} value={sym}>
+                  {getSymbolDisplay(sym)}
+                </option>
+              ))
+            ) : (
+              <option>No symbols available</option>
+            )}
           </select>
+          <div className="text-xs text-slate-500 mt-1">
+            Selected: <span className="text-slate-300 font-semibold">{getSymbolDisplay(symbol)}</span>
+          </div>
         </div>
 
         {/* Lot Size */}

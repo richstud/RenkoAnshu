@@ -27,7 +27,7 @@ function App() {
   const [wsNotification, setWsNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   // WebSocket for real-time updates
-  const { connected: wsConnected } = useWebSocket((data) => {
+  const { connected: wsConnected, ws } = useWebSocket((data) => {
     if (data.type === 'trade_executed') {
       setWsNotification({ type: 'success', message: 'Trade executed successfully!' });
       // Refresh trades
@@ -123,8 +123,11 @@ function App() {
             <h1 className="text-4xl font-bold mb-2">🟡 Renko Reversal Gold Bot</h1>
             <p className="text-slate-400">Automated XAUUSD trading powered by MetaTrader 5</p>
           </div>
-          <div className={`text-xs font-semibold px-3 py-1 rounded ${wsConnected ? 'bg-green-900 text-green-200' : 'bg-red-900 text-red-200'}`}>
-            {wsConnected ? '● Live' : '● Offline'}
+          <div className="flex flex-col items-end gap-1">
+            <div className={`text-xs font-semibold px-3 py-1 rounded ${wsConnected ? 'bg-green-900 text-green-200' : 'bg-red-900 text-red-200'}`}>
+              {wsConnected ? '🟢 Live' : '🔴 Offline'}
+            </div>
+            {!wsConnected && <div className="text-xs text-slate-500">Connecting to backend...</div>}
           </div>
         </div>
         {loading && <p className="text-slate-500 text-sm">Refreshing…</p>}
