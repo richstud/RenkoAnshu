@@ -234,17 +234,28 @@ def diagnose():
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     """WebSocket endpoint for real-time data streaming"""
-    await ws_manager.connect(websocket)
     try:
+        await ws_manager.connect(websocket)
+        logger.info(f"WebSocket connection accepted")
+        
+        # Send initial connection confirmation
+        await ws_manager.send_personal(websocket, {"type": "connected", "message": "WebSocket connected successfully"})
+        
         while True:
-            # Keep connection alive and receive any messages from client
-            data = await websocket.receive_text()
-            if data == "ping":
-                await ws_manager.send_personal(websocket, {"type": "pong"})
+            try:
+                # Keep connection alive and receive any messages from client
+                data = await websocket.receive_text()
+                if data == "ping":
+                    await ws_manager.send_personal(websocket, {"type": "pong"})
+            except Exception as recv_error:
+                logger.debug(f"WebSocket receive error: {recv_error}")
+                break
     except Exception as e:
-        logger.error(f"WebSocket error: {e}")
+        logger.error(f"WebSocket connection error: {e}", exc_info=True)
+        raise
     finally:
         ws_manager.disconnect(websocket)
+        logger.info(f"WebSocket connection closed")
 
 
 # ===================================
@@ -305,6 +316,18 @@ async def execute_manual_trade(trade: TradeRequest):
         
         if result.retcode != mt5.TRADE_RETCODE_DONE:
             raise Exception(f"Trade failed: {result.comment}")
+        
+        # Broadcast trade execution result
+        await ws_manager.broadcast({
+            "type": "trade_executed",
+            "status": "success",
+            "trade_id": result.order,
+            "symbol": trade.symbol,
+            "trade_type": trade.trade_type,
+            "lot_size": trade.lot_size,
+            "price": price,
+            "message": f"Trade executed: {trade.trade_type.upper()} {trade.lot_size} {trade.symbol} @ {price}"
+        })
         
         # Log trade
         trade_data = {

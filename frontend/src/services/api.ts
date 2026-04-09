@@ -38,14 +38,34 @@ export const startBot = () => request('/api/start-bot', { method: 'POST' });
 export const stopBot = () => request('/api/stop-bot', { method: 'POST' });
 export const updateSettings = (brick_size: number) => request('/api/update-settings', { method: 'POST', body: JSON.stringify({ brick_size }) });
 
-export const executeTrade = (trade: {
+export const executeTrade = async (trade: {
   account_id: number;
   symbol: string;
   trade_type: 'buy' | 'sell';
   lot_size: number;
   stop_loss?: number;
   take_profit?: number;
-}) => request('/api/execute-trade', { 
-  method: 'POST', 
-  body: JSON.stringify(trade) 
-});
+}) => {
+  console.log('📤 [API] Executing trade:', trade);
+  try {
+    const res = await fetch(`${BASE_URL}/api/execute-trade`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(trade)
+    });
+    
+    if (!res.ok) {
+      const errorText = await res.text();
+      console.error('❌ [API] Trade execution failed:', res.status, errorText);
+      throw new Error(`Trade failed: ${errorText}`);
+    }
+    
+    const result = await res.json();
+    console.log('✅ [API] Trade executed successfully:', result);
+    return result;
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    console.error('❌ [API] Trade execution error:', errorMsg);
+    throw error;
+  }
+};
