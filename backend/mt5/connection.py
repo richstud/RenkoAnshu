@@ -17,10 +17,12 @@ class AccountSession:
         self.account_info = None
 
     def connect(self):
-        if not mt5.initialize(path=settings.MT5_PATH):
+        if not mt5.initialize(path=settings.MT5_PATH, timeout=10000):
             raise RuntimeError(f"MT5 initialize failed: {mt5.last_error()}")
 
-        if not mt5.login(int(self.login), password=self.password, server=self.server):
+        time.sleep(1)  # Give MT5 time to initialize
+        
+        if not mt5.login(int(self.login), password=self.password, server=self.server, timeout=10000):
             raise RuntimeError(f"MT5 login failed {self.login}@{self.server}: {mt5.last_error()}")
 
         self.connected = True
