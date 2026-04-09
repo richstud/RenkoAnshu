@@ -17,6 +17,8 @@ function App() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [selectedAccount, setSelectedAccount] = useState<Account | null>(null);
   const [trades, setTrades] = useState<Trade[]>([]);
+  const [availableSymbols, setAvailableSymbols] = useState<string[]>([]);
+  const [selectedSymbol, setSelectedSymbol] = useState<string>('XAUUSD');
   const [watchlistSymbols, setWatchlistSymbols] = useState<string[]>([]);
   const [watchlistRefresh, setWatchlistRefresh] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -45,6 +47,21 @@ function App() {
       const trades = await getTrades();
       setAccounts(accs || []);
       setTrades(trades || []);
+      
+      // Fetch available symbols
+      try {
+        const res = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/tickers`);
+        if (res.ok) {
+          const tickers = await res.json();
+          const symbols = tickers.map((t: any) => t.symbol);
+          setAvailableSymbols(symbols);
+          if (symbols.length > 0 && !symbols.includes(selectedSymbol)) {
+            setSelectedSymbol(symbols[0]);
+          }
+        }
+      } catch (err) {
+        console.error('Failed to fetch symbols:', err);
+      }
     } catch (err) {
       console.error('Load error:', err);
       setError(err instanceof Error ? err.message : 'Failed to load data');
@@ -179,7 +196,8 @@ function App() {
             {selectedAccount && (
               <TradeExecutor 
                 accountId={selectedAccount.login}
-                symbol="XAUUSD"
+                availableSymbols={availableSymbols.length > 0 ? availableSymbols : ['XAUUSD']}
+                onSymbolSelected={setSelectedSymbol}
               />
             )}
             <TradeDashboard trades={trades} />

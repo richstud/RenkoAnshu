@@ -10,8 +10,16 @@ export function useWebSocket(onMessage?: (data: WebSocketMessage) => void) {
   const [ws, setWs] = useState<WebSocket | null>(null);
 
   useEffect(() => {
-    const wsUrl = `${import.meta.env.VITE_API_URL || 'http://localhost:8000'}`
-      .replace('http', 'ws');
+    // Get backend URL and convert to WebSocket URL
+    let backendUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+    
+    // Ensure URL doesn't have trailing slash
+    backendUrl = backendUrl.replace(/\/$/, '');
+    
+    // Convert http/https to ws/wss
+    const wsUrl = backendUrl
+      .replace(/^https:\/\//, 'wss://')
+      .replace(/^http:\/\//, 'ws://');
     
     const websocket = new WebSocket(`${wsUrl}/ws`);
 
@@ -39,10 +47,6 @@ export function useWebSocket(onMessage?: (data: WebSocketMessage) => void) {
     websocket.onclose = () => {
       console.log('WebSocket disconnected');
       setConnected(false);
-      // Attempt to reconnect after 3 seconds
-      setTimeout(() => {
-        // Reconnect logic can be added here
-      }, 3000);
     };
 
     setWs(websocket);

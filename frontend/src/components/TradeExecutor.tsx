@@ -3,16 +3,25 @@ import { executeTrade } from '../services/api';
 
 interface TradeExecutorProps {
   accountId: number | null;
-  symbol: string;
+  availableSymbols: string[];
+  onSymbolSelected?: (symbol: string) => void;
 }
 
-export default function TradeExecutor({ accountId, symbol }: TradeExecutorProps) {
+export default function TradeExecutor({ accountId, availableSymbols, onSymbolSelected }: TradeExecutorProps) {
+  const [symbol, setSymbol] = useState<string>(availableSymbols[0] || 'XAUUSD');
   const [tradeType, setTradeType] = useState<'buy' | 'sell'>('buy');
   const [lotSize, setLotSize] = useState(0.01);
   const [stopLoss, setStopLoss] = useState<number>();
   const [takeProfit, setTakeProfit] = useState<number>();
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  const handleSymbolChange = (newSymbol: string) => {
+    setSymbol(newSymbol);
+    if (onSymbolSelected) {
+      onSymbolSelected(newSymbol);
+    }
+  };
 
   const handleExecute = async () => {
     if (!accountId) {
@@ -77,10 +86,20 @@ export default function TradeExecutor({ accountId, symbol }: TradeExecutorProps)
           </button>
         </div>
 
-        {/* Symbol Display */}
-        <div className="text-center">
-          <div className="text-slate-400 text-sm">Symbol</div>
-          <div className="text-xl font-bold text-white">{symbol}</div>
+        {/* Symbol Selection */}
+        <div>
+          <label className="text-slate-400 text-sm block mb-1">Symbol</label>
+          <select
+            value={symbol}
+            onChange={(e) => handleSymbolChange(e.target.value)}
+            className="w-full px-3 py-2 rounded bg-slate-600 text-white border border-slate-500 focus:border-blue-400 outline-none"
+          >
+            {availableSymbols.map((sym) => (
+              <option key={sym} value={sym}>
+                {sym}
+              </option>
+            ))}
+          </select>
         </div>
 
         {/* Lot Size */}
