@@ -21,15 +21,15 @@ async function request(path: string, opts: RequestInit = {}) {
 // Accounts - return mock data if backend is unavailable
 export const getAccounts = async () => {
   const result = await request('/api/accounts');
-  return result?.data || [
-    { id: 1, login: 101510620, server: 'XMGlobal-MT5 5', status: 'active' }
+  return result || [
+    { id: 1, login: 101510620, server: 'XMGlobal-MT5 10', status: 'active' }
   ];
 };
 
 // Trades - return empty if backend is unavailable
 export const getTrades = async () => {
   const result = await request('/api/trades');
-  return result?.data || [];
+  return result || [];
 };
 
 export const startBot = () => request('/api/start-bot', { method: 'POST' });
