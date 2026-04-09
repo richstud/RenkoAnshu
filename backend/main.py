@@ -2,7 +2,7 @@ import asyncio
 import logging
 from typing import Optional
 
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -12,6 +12,7 @@ from backend.signals import signal_generator
 from backend.supabase.client import supabase_client
 from backend.worker import bot_worker
 from backend.api.endpoints import router as api_router
+from backend.websocket_manager import ws_manager
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -224,3 +225,119 @@ def diagnose():
         )
     
     return diagnostics
+
+
+# ===================================
+# WebSocket - Real-time Data Streaming
+# ===================================
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    """WebSocket endpoint for real-time data streaming"""
+    await ws_manager.connect(websocket)
+    try:
+        while True:
+            # Keep connection alive and receive any messages from client
+            data = await websocket.receive_text()
+            if data == "ping":
+                await ws_manager.send_personal(websocket, {"type": "pong"})
+    except Exception as e:
+        logger.error(f"WebSocket error: {e}")
+    finally:
+        ws_manager.disconnect(websocket)
+
+
+# ===================================
+# Manual Trade Execution Endpoints
+# ===================================
+
+class TradeRequest(BaseModel):
+    account_id: int
+    symbol: str
+    trade_type: str  # "buy" or "sell"
+    lot_size: float
+    stop_loss: Optional[float] = None
+    take_profit: Optional[float] = None
+
+
+@app.post("/execute-trade")
+async def execute_manual_trade(trade: TradeRequest):
+    """Execute a manual trade from the frontend"""
+    try:
+        # Get the account session
+        account_session = mt5_manager.get_session(trade.account_id)
+        if not account_session or not account_session.connected:
+            raise Exception(f"Account {trade.account_id} not connected")
+        
+        import MetaTrader5 as mt5
+        
+        # Create trade request
+        symbol_info = mt5.symbol_info(trade.symbol)
+        if symbol_info is None:
+            raise Exception(f"Symbol {trade.symbol} not found")
+        
+        # Determine order type
+        order_type = mt5.ORDER_TYPE_BUY if trade.trade_type.lower() == "buy" else mt5.ORDER_TYPE_SELL
+        
+        # Get current price
+        tick = mt5.symbol_info_tick(trade.symbol)
+        if tick is None:
+            raise Exception(f"Cannot get price for {trade.symbol}")
+        
+        price = tick.ask if order_type == mt5.ORDER_TYPE_BUY else tick.bid
+        
+        # Build request
+        request = {
+            "action": mt5.TRADE_ACTION_DEAL,
+            "symbol": trade.symbol,
+            "volume": trade.lot_size,
+            "type": order_type,
+            "price": price,
+            "sl": trade.stop_loss,
+            "tp": trade.take_profit,
+            "comment": "Manual trade from frontend",
+            "type_filling": mt5.ORDER_FILLING_IOC,
+            "type_time": mt5.ORDER_TIME_GTC,
+        }
+        
+        # Send order
+        result = mt5.order_send(request)
+        
+        if result.retcode != mt5.TRADE_RETCODE_DONE:
+            raise Exception(f"Trade failed: {result.comment}")
+        
+        # Log trade
+        trade_data = {
+            "account_id": trade.account_id,
+            "symbol": trade.symbol,
+            "type": trade.trade_type,
+            "lot": trade.lot_size,
+            "entry_price": price,
+            "stop_loss": trade.stop_loss,
+            "take_profit": trade.take_profit,
+            "ticket": result.order,
+            "timestamp": "now()"
+        }
+        
+        supabase_client.table("trades").insert(trade_data).execute()
+        
+        # Broadcast trade execution to all connected clients
+        await ws_manager.broadcast({
+            "type": "trade_executed",
+            "trade": trade_data
+        })
+        
+        return {
+            "success": True,
+            "message": f"Trade executed: {trade.trade_type.upper()} {trade.lot_size} {trade.symbol}",
+            "ticket": result.order
+        }
+        
+    except Exception as e:
+        logger.error(f"Trade execution error: {e}")
+        # Broadcast error to all connected clients
+        await ws_manager.broadcast({
+            "type": "trade_error",
+            "error": str(e)
+        })
+        raise HTTPException(status_code=400, detail=str(e))

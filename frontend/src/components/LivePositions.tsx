@@ -24,7 +24,7 @@ export default function LivePositions({ accountId }: LivePositionsProps) {
     const fetchPositions = async () => {
       try {
         const res = await fetch(
-          `${import.meta.env.VITE_API_URL}/api/trades?account_id=${accountId}`
+          `${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/trades?account_id=${accountId}`
         );
         if (res.ok) {
           const data = await res.json();

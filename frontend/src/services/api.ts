@@ -21,7 +21,8 @@ async function request(path: string, opts: RequestInit = {}) {
 // Accounts - return mock data if backend is unavailable
 export const getAccounts = async () => {
   const result = await request('/api/accounts');
-  return result || [
+  const data = result?.data || result || [];
+  return Array.isArray(data) ? data : [
     { id: 1, login: 101510620, server: 'XMGlobal-MT5 10', status: 'active' }
   ];
 };
@@ -29,9 +30,22 @@ export const getAccounts = async () => {
 // Trades - return empty if backend is unavailable
 export const getTrades = async () => {
   const result = await request('/api/trades');
-  return result || [];
+  const data = result?.data || result || [];
+  return Array.isArray(data) ? data : [];
 };
 
 export const startBot = () => request('/api/start-bot', { method: 'POST' });
 export const stopBot = () => request('/api/stop-bot', { method: 'POST' });
 export const updateSettings = (brick_size: number) => request('/api/update-settings', { method: 'POST', body: JSON.stringify({ brick_size }) });
+
+export const executeTrade = (trade: {
+  account_id: number;
+  symbol: string;
+  trade_type: 'buy' | 'sell';
+  lot_size: number;
+  stop_loss?: number;
+  take_profit?: number;
+}) => request('/api/execute-trade', { 
+  method: 'POST', 
+  body: JSON.stringify(trade) 
+});

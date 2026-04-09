@@ -25,15 +25,39 @@ export default function TickersPanel({ onAddToWatchlist, watchlistSymbols }: Tic
   const [quotes, setQuotes] = useState<Record<string, Quote>>({});
   const [loading, setLoading] = useState(false);
 
+  const fetchQuote = async (symbol: string) => {
+    try {
+      const res = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/tickers/${symbol}/quote`);
+      if (res.ok) {
+        const quote = await res.json();
+        setQuotes(prev => ({
+          ...prev,
+          [symbol]: quote
+        }));
+      }
+    } catch (error) {
+      console.error(`Failed to fetch quote for ${symbol}:`, error);
+    }
+  };
+
+  const fetchQuotes = () => {
+    tickers.forEach(ticker => {
+      fetchQuote(ticker.symbol);
+    });
+  };
+
   useEffect(() => {
     fetchTickers();
-    const interval = setInterval(fetchQuotes, 2000); // Update quotes every 2 seconds
-    return () => clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    const interval = setInterval(fetchQuotes, 2000);
+    return () => clearInterval(interval);
+  }, [tickers]);
 
   const fetchTickers = async () => {
     try {
-      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/tickers`);
+      const res = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/tickers`);
       if (res.ok) {
         const data = await res.json();
         setTickers(data.data);
@@ -47,26 +71,7 @@ export default function TickersPanel({ onAddToWatchlist, watchlistSymbols }: Tic
     }
   };
 
-  const fetchQuote = async (symbol: string) => {
-    try {
-      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/tickers/${symbol}/quote`);
-      if (res.ok) {
-        const quote = await res.json();
-        setQuotes(prev => ({
-          ...prev,
-          [symbol]: quote
-        }));
-      }
-    } catch (error) {
-      console.error(`Failed to fetch quote for ${symbol}:`, error);
-    }
-  };
 
-  const fetchQuotes = async () => {
-    tickers.forEach(ticker => {
-      fetchQuote(ticker.symbol);
-    });
-  };
 
   const getSpread = (symbol: string) => {
     const quote = quotes[symbol];

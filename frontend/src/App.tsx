@@ -7,6 +7,8 @@ import LogsViewer from './components/LogsViewer';
 import TickersPanel from './components/TickersPanel';
 import WatchlistManager from './components/WatchlistManager';
 import LivePositions from './components/LivePositions';
+import TradeExecutor from './components/TradeExecutor';
+import { useWebSocket } from './hooks/useWebSocket';
 
 export type Trade = { id: number; account_id: number; symbol: string; type: string; lot: number; entry_price: number; exit_price?: number; profit?: number; timestamp: string };
 export type Account = { id: number; login: number; server: string; status: string };
@@ -20,6 +22,20 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [wsNotification, setWsNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  // WebSocket for real-time updates
+  const { connected: wsConnected } = useWebSocket((data) => {
+    if (data.type === 'trade_executed') {
+      setWsNotification({ type: 'success', message: 'Trade executed successfully!' });
+      // Refresh trades
+      load();
+      setTimeout(() => setWsNotification(null), 3000);
+    } else if (data.type === 'trade_error') {
+      setWsNotification({ type: 'error', message: `Trade error: ${data.error}` });
+      setTimeout(() => setWsNotification(null), 3000);
+    }
+  });
 
   const load = async () => {
     try {
@@ -85,10 +101,22 @@ function App() {
   return (
     <div className="min-h-screen bg-slate-900 text-white p-4">
       <header className="mb-6">
-        <h1 className="text-4xl font-bold mb-2">🟡 Renko Reversal Gold Bot</h1>
-        <p className="text-slate-400">Automated XAUUSD trading powered by MetaTrader 5</p>
+        <div className="flex justify-between items-start mb-3">
+          <div>
+            <h1 className="text-4xl font-bold mb-2">🟡 Renko Reversal Gold Bot</h1>
+            <p className="text-slate-400">Automated XAUUSD trading powered by MetaTrader 5</p>
+          </div>
+          <div className={`text-xs font-semibold px-3 py-1 rounded ${wsConnected ? 'bg-green-900 text-green-200' : 'bg-red-900 text-red-200'}`}>
+            {wsConnected ? '● Live' : '● Offline'}
+          </div>
+        </div>
         {loading && <p className="text-slate-500 text-sm">Refreshing…</p>}
         {error && <p className="text-red-400 text-sm">Error: {error}</p>}
+        {wsNotification && (
+          <div className={`p-2 rounded text-sm mt-2 ${wsNotification.type === 'success' ? 'bg-green-900 text-green-200' : 'bg-red-900 text-red-200'}`}>
+            {wsNotification.message}
+          </div>
+        )}
       </header>
 
       <div className="space-y-4">
@@ -148,6 +176,12 @@ function App() {
           </div>
 
           <div className="space-y-4">
+            {selectedAccount && (
+              <TradeExecutor 
+                accountId={selectedAccount.login}
+                symbol="XAUUSD"
+              />
+            )}
             <TradeDashboard trades={trades} />
             <LogsViewer />
           </div>

@@ -31,7 +31,7 @@ export default function WatchlistManager({ accountId, onUpdate }: WatchlistManag
   const fetchWatchlist = async () => {
     try {
       const res = await fetch(
-        `${import.meta.env.VITE_API_URL}/api/watchlist?account_id=${accountId}`
+        `${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/watchlist?account_id=${accountId}`
       );
       if (res.ok) {
         const data = await res.json();
@@ -50,7 +50,7 @@ export default function WatchlistManager({ accountId, onUpdate }: WatchlistManag
   const handleSave = async (id: number) => {
     try {
       const res = await fetch(
-        `${import.meta.env.VITE_API_URL}/api/watchlist/${id}`,
+        `${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/watchlist/${id}`,
         {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
@@ -72,7 +72,7 @@ export default function WatchlistManager({ accountId, onUpdate }: WatchlistManag
     if (confirm('Remove from watchlist?')) {
       try {
         const res = await fetch(
-          `${import.meta.env.VITE_API_URL}/api/watchlist/${id}`,
+          `${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/watchlist/${id}`,
           { method: 'DELETE' }
         );
 
@@ -89,7 +89,7 @@ export default function WatchlistManager({ accountId, onUpdate }: WatchlistManag
   const toggleAlgo = async (item: WatchlistItem) => {
     try {
       const res = await fetch(
-        `${import.meta.env.VITE_API_URL}/api/algo/toggle/${item.id}`,
+        `${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/algo/toggle/${item.id}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
