@@ -61,12 +61,32 @@ class AlgoToggle(BaseModel):
 
 @router.get("/tickers")
 async def get_tickers():
-    """Get all available tickers"""
+    """Get all available tickers that exist in MT5"""
     try:
+        import MetaTrader5 as mt5
+        
         symbols = supabase_client.table('available_symbols').select('*').eq('is_active', True).execute()
+        
+        # Filter to only symbols available in MT5
+        available = []
+        for symbol_data in symbols.data:
+            symbol = symbol_data['symbol']
+            try:
+                # Check if symbol exists in MT5
+                symbol_info = mt5.symbol_info(symbol)
+                if symbol_info is not None:
+                    available.append(symbol_data)
+                    logger.info(f"✅ Symbol {symbol} available in MT5")
+                else:
+                    logger.warning(f"⚠️ Symbol {symbol} not found in MT5 - skipping from frontend list")
+            except Exception as e:
+                logger.warning(f"Error checking symbol {symbol}: {e}")
+        
         return {
-            "count": len(symbols.data),
-            "data": symbols.data
+            "count": len(available),
+            "total": len(symbols.data),
+            "unavailable": len(symbols.data) - len(available),
+            "data": available
         }
     except Exception as e:
         logger.error(f"Error getting tickers: {e}")
