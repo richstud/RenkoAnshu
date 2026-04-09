@@ -3,6 +3,7 @@ import logging
 from typing import Optional
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from backend.config import settings
@@ -10,10 +11,23 @@ from backend.mt5.connection import mt5_manager
 from backend.signals import signal_generator
 from backend.supabase.client import supabase_client
 from backend.worker import bot_worker
+from backend.api.endpoints import router as api_router
 
 logging.basicConfig(level=logging.INFO)
 
 app = FastAPI(title="Renko Reversal Gold Bot")
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, specify your frontend domain
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Include API router
+app.include_router(api_router)
 
 class AccountPayload(BaseModel):
     login: int
@@ -29,8 +43,36 @@ async def run_worker():
 
 @app.on_event("startup")
 async def startup_event():
-    # Setup supabase schema if needed
-    pass
+    """Initialize MT5 connection and load accounts on startup"""
+    try:
+        # Try to initialize default account from settings
+        if settings.MT5_LOGIN and settings.MT5_PASSWORD and settings.MT5_SERVER:
+            mt5_manager.add_account(
+                settings.MT5_LOGIN,
+                settings.MT5_PASSWORD,
+                settings.MT5_SERVER
+            )
+            logger.info(f"Added default account {settings.MT5_LOGIN} from environment")
+        
+        # Load accounts from Supabase and connect
+        try:
+            response = supabase_client.table("accounts").select("*").execute()
+            if response.data:
+                for account in response.data:
+                    if account["login"] not in mt5_manager.sessions:
+                        # Skip, just load from DB for reference
+                        pass
+                logger.info(f"Loaded {len(response.data)} accounts from database")
+        except Exception as e:
+            logger.warning(f"Could not load accounts from Supabase: {e}")
+        
+        # Try to connect at least one account
+        if mt5_manager.sessions:
+            logger.info(f"Attempting to connect {len(mt5_manager.sessions)} account(s)")
+            mt5_manager.connect_all()
+        
+    except Exception as e:
+        logger.error(f"Startup error: {e}")
 
 @app.post("/start-bot")
 async def start_bot():
@@ -95,7 +137,7 @@ def get_trades():
 
 @app.get("/logs")
 def get_logs():
-    res = supabase_client.table("logs").select("*").order("created_at", {"ascending": False}).limit(100).execute()
+    res = supabase_client.table("logs").select("*").order("created_at", desc=True).limit(100).execute()
     return res.data
 
 @app.post("/update-settings")
@@ -111,4 +153,73 @@ def update_settings(payload: SettingsPayload):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "active": bot_worker.active}
+    """Health check endpoint with connection status"""
+    mt5_connected = False
+    connected_accounts = []
+    
+    for login, session in mt5_manager.sessions.items():
+        if session.connected:
+            mt5_connected = True
+            connected_accounts.append(login)
+    
+    return {
+        "status": "ok",
+        "active": bot_worker.active,
+        "mt5_connected": mt5_connected,
+        "total_accounts": len(mt5_manager.sessions),
+        "connected_accounts": connected_accounts,
+        "api_version": "1.0"
+    }
+
+@app.get("/diagnose")
+def diagnose():
+    """Diagnose MT5 and system issues"""
+    import MetaTrader5 as mt5
+    
+    diagnostics = {
+        "mt5_initialized": False,
+        "mt5_path": settings.MT5_PATH,
+        "accounts_registered": len(mt5_manager.sessions),
+        "accounts_connected": [],
+        "default_account_configured": bool(settings.MT5_LOGIN),
+        "supabase_connected": False,
+        "issues": []
+    }
+    
+    # Check if MT5 is initialized
+    try:
+        platform_info = mt5.terminal_info()
+        if platform_info:
+            diagnostics["mt5_initialized"] = True
+    except Exception as e:
+        diagnostics["issues"].append(f"MT5 not initialized: {str(e)}")
+    
+    # Check connected accounts
+    for login, session in mt5_manager.sessions.items():
+        if session.connected:
+            diagnostics["accounts_connected"].append({
+                "login": login,
+                "server": session.server,
+                "balance": session.get_balance()
+            })
+        else:
+            diagnostics["issues"].append(f"Account {login} is not connected")
+    
+    # Check Supabase
+    try:
+        supabase_client.table("accounts").select("*").limit(1).execute()
+        diagnostics["supabase_connected"] = True
+    except Exception as e:
+        diagnostics["issues"].append(f"Supabase connection failed: {str(e)}")
+    
+    if not diagnostics["mt5_initialized"]:
+        diagnostics["issues"].append(
+            "MT5 Terminal is not running. Launch MetaTrader 5 and ensure you are logged in."
+        )
+    
+    if not diagnostics["accounts_connected"]:
+        diagnostics["issues"].append(
+            f"No MT5 accounts connected. Check your credentials in .env and ensure MT5 terminal is running."
+        )
+    
+    return diagnostics
