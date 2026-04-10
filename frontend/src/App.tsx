@@ -18,6 +18,7 @@ function App() {
   const [selectedAccount, setSelectedAccount] = useState<Account | null>(null);
   const [trades, setTrades] = useState<Trade[]>([]);
   const [availableSymbols, setAvailableSymbols] = useState<string[]>([]);
+  const [symbolData, setSymbolData] = useState<any[]>([]);
   const [selectedSymbol, setSelectedSymbol] = useState<string>('XAUUSD');
   const [watchlistSymbols, setWatchlistSymbols] = useState<string[]>([]);
   const [watchlistRefresh, setWatchlistRefresh] = useState(0);
@@ -52,7 +53,9 @@ function App() {
       try {
         const res = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/tickers`);
         if (res.ok) {
-          const tickers = await res.json();
+          const response = await res.json();
+          const tickers = response.data || response;
+          setSymbolData(tickers);
           const symbols = tickers.map((t: any) => t.symbol);
           setAvailableSymbols(symbols);
           if (symbols.length > 0 && !symbols.includes(selectedSymbol)) {
@@ -200,6 +203,7 @@ function App() {
               <TradeExecutor 
                 accountId={selectedAccount.login}
                 availableSymbols={availableSymbols.length > 0 ? availableSymbols : ['XAUUSD']}
+                symbolData={symbolData}
                 onSymbolSelected={setSelectedSymbol}
               />
             )}

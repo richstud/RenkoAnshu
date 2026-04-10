@@ -1,24 +1,19 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { executeTrade } from '../services/api';
 
-// Symbol display names mapping
-const SYMBOL_NAMES: Record<string, string> = {
-  'XAUUSD': '🟡 Gold',
-  'EURUSD': '🇪🇺 EUR/USD',
-  'GBPUSD': '🇬🇧 GBP/USD',
-  'USDJPY': '🇺🇸 USD/JPY',
-  'AUDUSD': '🇦🇺 AUD/USD',
-  'NZDUSD': '🇳🇿 NZD/USD',
-  'USDCAD': '🇨🇦 USD/CAD',
-};
+interface SymbolData {
+  symbol: string;
+  description?: string;
+}
 
 interface TradeExecutorProps {
   accountId: number | null;
   availableSymbols: string[];
+  symbolData?: SymbolData[];
   onSymbolSelected?: (symbol: string) => void;
 }
 
-export default function TradeExecutor({ accountId, availableSymbols, onSymbolSelected }: TradeExecutorProps) {
+export default function TradeExecutor({ accountId, availableSymbols, symbolData = [], onSymbolSelected }: TradeExecutorProps) {
   const [symbol, setSymbol] = useState<string>(availableSymbols[0] || 'XAUUSD');
   const [tradeType, setTradeType] = useState<'buy' | 'sell'>('buy');
   const [lotSize, setLotSize] = useState(0.01);
@@ -27,7 +22,19 @@ export default function TradeExecutor({ accountId, availableSymbols, onSymbolSel
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  const getSymbolDisplay = (sym: string) => SYMBOL_NAMES[sym] || sym;
+  useEffect(() => {
+    if (availableSymbols.length > 0 && !availableSymbols.includes(symbol)) {
+      setSymbol(availableSymbols[0]);
+    }
+  }, [availableSymbols, symbol]);
+
+  const getSymbolDisplay = (sym: string) => {
+    const data = symbolData.find(s => s.symbol === sym);
+    if (data?.description) {
+      return `${sym} - ${data.description}`;
+    }
+    return sym;
+  };
 
   const handleSymbolChange = (newSymbol: string) => {
     setSymbol(newSymbol);
