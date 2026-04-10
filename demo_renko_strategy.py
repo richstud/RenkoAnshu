@@ -13,7 +13,7 @@ print()
 # Initialize engines
 brick_size = 0.05  # 0.05 for EURUSD (50 pips)
 renko = RenkoEngine(brick_size)
-strategy = StrategyEngine()
+strategy = StrategyEngine(renko)
 
 print(f"📊 Configuration:")
 print(f"   Brick Size: {brick_size}")

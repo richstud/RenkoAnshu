@@ -13,17 +13,24 @@ print("LIVE RENKO STRATEGY - REAL MT5 PRICES")
 print("=" * 80)
 print()
 
-# Initialize MT5
-mt5.initialize(path=settings.MT5_PATH)
+# Initialize MT5 - it may already be running
+if not mt5.initialize(path=settings.MT5_PATH):
+    print("⚠️  MT5 already initialized")
+else:
+    print("✅ MT5 initialized")
+
+# Try to login - if already logged in, this may fail but we can continue
 result = mt5.login(settings.MT5_LOGIN, settings.MT5_PASSWORD, settings.MT5_SERVER)
 
-if not result:
-    print("❌ Failed to login to MT5!")
+if result:
+    print("✅ Logged in to MT5")
+elif mt5.terminal_info():
+    print("✅ MT5 already running (using existing session)")
+else:
+    print("❌ MT5 not available - make sure MT5 is running and logged in")
+    print("   Please start MetaTrader 5 and login first")
     mt5.shutdown()
     exit(1)
-
-print("✅ Connected to MT5")
-print()
 
 # Select a symbol to demo - GOLD or EURUSD
 symbol = "GOLD"  # Change to "EURUSD" if GOLD not available
@@ -59,7 +66,7 @@ else:
     brick_size = 0.01
 
 renko = RenkoEngine(brick_size)
-strategy = StrategyEngine()
+strategy = StrategyEngine(renko)
 
 print(f"Renko Configuration:")
 print(f"   Brick Size: {brick_size}")
