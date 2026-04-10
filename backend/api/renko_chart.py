@@ -63,13 +63,27 @@ def calculate_renko_bricks(symbol: str, rates: list, brick_size: float, limit: i
                 "signal": "BUY" if brick.color == "green" else "SELL",
             })
         
+        # Get current bid/ask from latest close price
+        current_price = float(rates[-1]['close'])
+        # Calculate bid/ask as close +/- small spread (typical forex spread)
+        bid = current_price - 0.0001  # 1 pip spread estimate
+        ask = current_price + 0.0001
+        
+        # For symbols with larger pip sizes, adjust spread
+        if current_price > 100:
+            bid = current_price - 0.01
+            ask = current_price + 0.01
+        elif current_price > 10:
+            bid = current_price - 0.001
+            ask = current_price + 0.001
+        
         return {
             "bricks": chart_data[-limit:],
             "total_bricks": len(all_bricks),
             "direction": renko.direction(),
-            "current_price": float(rates[-1]['close']),
-            "bid": float(rates[-1]['bid']),
-            "ask": float(rates[-1]['ask']),
+            "current_price": current_price,
+            "bid": bid,
+            "ask": ask,
         }
     except Exception as e:
         logger.error(f"Error calculating Renko: {e}")
