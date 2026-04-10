@@ -377,17 +377,14 @@ async def execute_manual_trade(trade: TradeRequest):
             "message": f"Trade executed: {trade.trade_type.upper()} {trade.lot_size} {trade.symbol} @ {price}"
         })
         
-        # Log trade
+        # Log trade - only include fields that the table has
         trade_data = {
             "account_id": trade.account_id,
             "symbol": trade.symbol,
             "type": trade.trade_type,
             "lot": trade.lot_size,
             "entry_price": price,
-            "stop_loss": trade.stop_loss,
-            "take_profit": trade.take_profit,
             "ticket": result.order,
-            "timestamp": "now()"
         }
         
         supabase_client.table("trades").insert(trade_data).execute()
