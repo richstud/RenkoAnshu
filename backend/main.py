@@ -76,7 +76,7 @@ async def startup_event():
     except Exception as e:
         logger.error(f"Startup error: {e}")
 
-@app.post("/start-bot")
+@app.post("/api/start-bot")
 async def start_bot():
     if bot_worker.active:
         return {"message": "Bot already running"}
@@ -84,14 +84,14 @@ async def start_bot():
     asyncio.create_task(run_worker())
     return {"message": "Bot started"}
 
-@app.post("/stop-bot")
+@app.post("/api/stop-bot")
 async def stop_bot():
     if not bot_worker.active:
         return {"message": "Bot is not running"}
     await bot_worker.stop()
     return {"message": "Bot stopped"}
 
-@app.get("/signal/{symbol}/{price}")
+@app.get("/api/signal/{symbol}/{price}")
 def get_signal_endpoint(symbol: str, price: float):
     """Get trading signal for a symbol at a given price."""
     try:
@@ -110,13 +110,13 @@ def get_signal_endpoint(symbol: str, price: float):
             "error": str(exc),
         }
 
-@app.post("/reset-signal/{symbol}")
+@app.post("/api/reset-signal/{symbol}")
 def reset_signal(symbol: str):
     """Reset signal generator for a symbol."""
     signal_generator.reset_symbol(symbol)
     return {"message": f"Signal generator reset for {symbol}"}
 
-@app.post("/accounts")
+@app.post("/api/accounts")
 def add_account(account: AccountPayload):
     mt5_manager.add_account(account.login, account.password, account.server)
     data = {
@@ -127,22 +127,22 @@ def add_account(account: AccountPayload):
     supabase_client.table("accounts").insert(data).execute()
     return {"message": "Account added"}
 
-@app.get("/accounts")
+@app.get("/api/accounts")
 def get_accounts():
     res = supabase_client.table("accounts").select("*").execute()
     return res.data
 
-@app.get("/trades")
+@app.get("/api/trades")
 def get_trades():
     res = supabase_client.table("trades").select("*").execute()
     return res.data
 
-@app.get("/logs")
+@app.get("/api/logs")
 def get_logs():
     res = supabase_client.table("logs").select("*").order("created_at", desc=True).limit(100).execute()
     return res.data
 
-@app.post("/update-settings")
+@app.post("/api/update-settings")
 def update_settings(payload: SettingsPayload):
     if payload.brick_size is not None:
         settings.RENKO_BRICK_SIZE = payload.brick_size
@@ -271,7 +271,7 @@ class TradeRequest(BaseModel):
     take_profit: Optional[float] = None
 
 
-@app.post("/execute-trade")
+@app.post("/api/execute-trade")
 async def execute_manual_trade(trade: TradeRequest):
     """Execute a manual trade from the frontend"""
     try:
