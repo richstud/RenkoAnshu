@@ -277,8 +277,15 @@ async def execute_manual_trade(trade: TradeRequest):
     try:
         # Get the account session
         account_session = mt5_manager.get_session(trade.account_id)
-        if not account_session or not account_session.connected:
-            raise Exception(f"Account {trade.account_id} not connected")
+        if not account_session:
+            raise Exception(f"Account {trade.account_id} not registered")
+        
+        # If connection was lost, try to reconnect
+        if not account_session.connected:
+            logger.warning(f"Account {trade.account_id} disconnected, attempting reconnection...")
+            account_session.connect()
+            if not account_session.connected:
+                raise Exception(f"Account {trade.account_id} not connected")
         
         import MetaTrader5 as mt5
         
