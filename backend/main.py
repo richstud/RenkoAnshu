@@ -13,6 +13,8 @@ from backend.supabase.client import supabase_client
 from backend.worker import bot_worker
 from backend.api.endpoints import router as api_router
 from backend.api.renko_chart import router as renko_router
+from backend.api.auto_trading import router as auto_trading_router
+from backend.services.auto_trader import start_auto_trading, stop_auto_trading
 from backend.websocket_manager import ws_manager
 
 logging.basicConfig(level=logging.INFO)
@@ -32,6 +34,7 @@ app.add_middleware(
 # Include API routers
 app.include_router(api_router)
 app.include_router(renko_router)
+app.include_router(auto_trading_router)
 
 class AccountPayload(BaseModel):
     login: int
@@ -79,8 +82,22 @@ async def startup_event():
             logger.info(f"Attempting to connect {len(mt5_manager.sessions)} account(s)")
             mt5_manager.connect_all()
         
+        # Start auto-trading service
+        logger.info("Starting auto-trading service...")
+        await start_auto_trading()
+        
     except Exception as e:
         logger.error(f"Startup error: {e}")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Cleanup on shutdown"""
+    try:
+        logger.info("Shutting down services...")
+        await stop_auto_trading()
+        logger.info("Auto-trading service stopped")
+    except Exception as e:
+        logger.error(f"Shutdown error: {e}")
 
 @app.post("/api/start-bot")
 async def start_bot():
