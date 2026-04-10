@@ -314,6 +314,29 @@ async def execute_manual_trade(trade: TradeRequest):
         
         price = tick.ask if order_type == mt5.ORDER_TYPE_BUY else tick.bid
         
+        # Calculate actual stop loss and take profit prices from pips
+        if trade.stop_loss and trade.stop_loss > 0:
+            # Convert pips to price levels
+            pip_size = symbol_info.point * (10 if symbol_info.digits == 5 else 1)
+            stop_loss_pips = trade.stop_loss
+            if order_type == mt5.ORDER_TYPE_BUY:
+                sl_price = price - (stop_loss_pips * pip_size)
+            else:
+                sl_price = price + (stop_loss_pips * pip_size)
+        else:
+            sl_price = None
+            
+        if trade.take_profit and trade.take_profit > 0:
+            # Convert pips to price levels
+            pip_size = symbol_info.point * (10 if symbol_info.digits == 5 else 1)
+            tp_pips = trade.take_profit
+            if order_type == mt5.ORDER_TYPE_BUY:
+                tp_price = price + (tp_pips * pip_size)
+            else:
+                tp_price = price - (tp_pips * pip_size)
+        else:
+            tp_price = None
+        
         # Build request - only include fields that have values
         request = {
             "action": mt5.TRADE_ACTION_DEAL,
@@ -327,10 +350,10 @@ async def execute_manual_trade(trade: TradeRequest):
         }
         
         # Add stop loss and take profit only if provided
-        if trade.stop_loss:
-            request["sl"] = trade.stop_loss
-        if trade.take_profit:
-            request["tp"] = trade.take_profit
+        if sl_price:
+            request["sl"] = round(sl_price, symbol_info.digits)
+        if tp_price:
+            request["tp"] = round(tp_price, symbol_info.digits)
         
         # Send order
         result = mt5.order_send(request)

@@ -144,28 +144,30 @@ export default function TradeExecutor({ accountId, availableSymbols, symbolData 
 
         {/* Stop Loss */}
         <div>
-          <label className="text-slate-400 text-sm block mb-1">Stop Loss (optional)</label>
+          <label className="text-slate-400 text-sm block mb-1">Stop Loss in Pips (optional)</label>
           <input
             type="number"
-            step="0.01"
+            step="0.1"
             value={stopLoss || ''}
             onChange={(e) => setStopLoss(e.target.value ? parseFloat(e.target.value) : undefined)}
-            placeholder="0.00"
+            placeholder="e.g., 10"
             className="w-full px-3 py-2 rounded bg-slate-600 text-white border border-slate-500 focus:border-blue-400 outline-none"
           />
+          <div className="text-xs text-slate-500 mt-1">Enter number of pips below current price</div>
         </div>
 
         {/* Take Profit */}
         <div>
-          <label className="text-slate-400 text-sm block mb-1">Take Profit (optional)</label>
+          <label className="text-slate-400 text-sm block mb-1">Take Profit in Pips (optional)</label>
           <input
             type="number"
-            step="0.01"
+            step="0.1"
             value={takeProfit || ''}
             onChange={(e) => setTakeProfit(e.target.value ? parseFloat(e.target.value) : undefined)}
-            placeholder="0.00"
+            placeholder="e.g., 20"
             className="w-full px-3 py-2 rounded bg-slate-600 text-white border border-slate-500 focus:border-blue-400 outline-none"
           />
+          <div className="text-xs text-slate-500 mt-1">Enter number of pips above current price</div>
         </div>
 
         {/* Execute Button */}
