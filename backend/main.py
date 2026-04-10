@@ -12,6 +12,7 @@ from backend.signals import signal_generator
 from backend.supabase.client import supabase_client
 from backend.worker import bot_worker
 from backend.api.endpoints import router as api_router
+from backend.api.renko_chart import router as renko_router
 from backend.websocket_manager import ws_manager
 
 logging.basicConfig(level=logging.INFO)
@@ -28,8 +29,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include API router
+# Include API routers
 app.include_router(api_router)
+app.include_router(renko_router)
 
 class AccountPayload(BaseModel):
     login: int

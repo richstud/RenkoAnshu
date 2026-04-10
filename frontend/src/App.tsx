@@ -8,6 +8,7 @@ import TickersPanel from './components/TickersPanel';
 import WatchlistManager from './components/WatchlistManager';
 import LivePositions from './components/LivePositions';
 import TradeExecutor from './components/TradeExecutor';
+import RenkoChart from './components/RenkoChart';
 import { useWebSocket } from './hooks/useWebSocket';
 
 export type Trade = { id: number; account_id: number; symbol: string; type: string; lot: number; entry_price: number; exit_price?: number; profit?: number; timestamp: string };
@@ -189,6 +190,9 @@ function App() {
                 </div>
                 <div className="mt-4">
                   <LivePositions accountId={selectedAccount.login} />
+                </div>
+                <div className="mt-4">
+                  <RenkoChart symbol={selectedSymbol || 'EURUSD'} />
                 </div>
               </>
             ) : (
