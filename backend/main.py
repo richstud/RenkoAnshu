@@ -298,6 +298,12 @@ async def execute_manual_trade(trade: TradeRequest):
         if symbol_info is None:
             raise Exception(f"Symbol {trade.symbol} not found")
         
+        # Validate lot size
+        if trade.lot_size < symbol_info.volume_min:
+            raise Exception(f"Lot size {trade.lot_size} is below minimum {symbol_info.volume_min}")
+        if trade.lot_size > symbol_info.volume_max:
+            raise Exception(f"Lot size {trade.lot_size} exceeds maximum {symbol_info.volume_max}")
+        
         # Determine order type
         order_type = mt5.ORDER_TYPE_BUY if trade.trade_type.lower() == "buy" else mt5.ORDER_TYPE_SELL
         
@@ -308,22 +314,30 @@ async def execute_manual_trade(trade: TradeRequest):
         
         price = tick.ask if order_type == mt5.ORDER_TYPE_BUY else tick.bid
         
-        # Build request
+        # Build request - only include fields that have values
         request = {
             "action": mt5.TRADE_ACTION_DEAL,
             "symbol": trade.symbol,
             "volume": trade.lot_size,
             "type": order_type,
             "price": price,
-            "sl": trade.stop_loss,
-            "tp": trade.take_profit,
             "comment": "Manual trade from frontend",
             "type_filling": mt5.ORDER_FILLING_IOC,
             "type_time": mt5.ORDER_TIME_GTC,
         }
         
+        # Add stop loss and take profit only if provided
+        if trade.stop_loss:
+            request["sl"] = trade.stop_loss
+        if trade.take_profit:
+            request["tp"] = trade.take_profit
+        
         # Send order
         result = mt5.order_send(request)
+        
+        if result is None:
+            error_info = mt5.last_error()
+            raise Exception(f"Order send failed: {error_info}")
         
         if result.retcode != mt5.TRADE_RETCODE_DONE:
             raise Exception(f"Trade failed: {result.comment}")
