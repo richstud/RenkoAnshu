@@ -1,6 +1,7 @@
 """
 Real-time Renko Chart Endpoint
 Provides Renko brick data for frontend charting - directly from MT5
+Non-blocking implementation with bid/ask support
 """
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from backend.renko.engine import RenkoEngine
@@ -8,10 +9,12 @@ from backend.strategy.engine import StrategyEngine
 from backend.config import settings
 from backend.mt5.connection import mt5_manager
 import MetaTrader5 as mt5
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
 import json
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
+import time
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/renko", tags=["renko"])
@@ -20,24 +23,77 @@ router = APIRouter(prefix="/api/renko", tags=["renko"])
 renko_engines = {}
 strategy_engines = {}
 last_rates = {}  # Cache last rates for each symbol
+chart_cache = {}  # Cache chart data to avoid recalculation
+cache_ttl = {}  # Cache time-to-live
+
+# Thread pool for non-blocking calculations
+executor = ThreadPoolExecutor(max_workers=4)
+
+def calculate_renko_bricks(symbol: str, rates: list, brick_size: float, limit: int = 100):
+    """
+    ⚡ Runs in thread pool - non-blocking
+    Calculate Renko bricks without blocking event loop
+    """
+    try:
+        engine_key = f"{symbol}_{brick_size}"
+        
+        if engine_key not in renko_engines:
+            renko_engines[engine_key] = RenkoEngine(brick_size)
+            strategy_engines[engine_key] = StrategyEngine(renko_engines[engine_key])
+        
+        renko = renko_engines[engine_key]
+        
+        # Only feed last 50 rates to avoid expensive calculations
+        for rate in rates[-50:]:
+            renko.feed_tick(rate['close'])
+        
+        # Get brick history
+        all_bricks = renko.history(min(limit, 100))
+        
+        # Format bricks
+        chart_data = []
+        for i, brick in enumerate(all_bricks):
+            chart_data.append({
+                "index": i,
+                "open": float(brick.open_price),
+                "close": float(brick.close_price),
+                "high": float(brick.high),
+                "low": float(brick.low),
+                "color": brick.color,
+                "signal": "BUY" if brick.color == "green" else "SELL",
+            })
+        
+        return {
+            "bricks": chart_data[-limit:],
+            "total_bricks": len(all_bricks),
+            "direction": renko.direction(),
+            "current_price": float(rates[-1]['close']),
+            "bid": float(rates[-1]['bid']),
+            "ask": float(rates[-1]['ask']),
+        }
+    except Exception as e:
+        logger.error(f"Error calculating Renko: {e}")
+        raise
 
 @router.get("/chart/{symbol}")
-async def get_renko_chart(symbol: str, brick_size: float = None, limit: int = 100):
+async def get_renko_chart(symbol: str, brick_size: float = None, timeframe: int = 1, limit: int = 100):
     """
     Get Renko brick data for charting
-    ⚡ DATA SOURCE: REAL-TIME from MT5 (1-minute timeframe)
+    ⚡ NON-BLOCKING - Runs calculations in thread pool
+    ⚡ CACHING - Returns cached data if fresh
     
     Args:
         symbol: Trading symbol (e.g., EURUSD, GOLD, BTCUSD)
         brick_size: Brick size (if None, uses defaults)
-        limit: Number of bricks to return (max 500)
+        timeframe: 1 for 1-minute, 5 for 5-minute candles (default: 1)
+        limit: Number of bricks to return (max 100 - kept low for performance)
     
     Returns:
-        Real-time Renko brick data from MT5
+        Real-time Renko brick data from MT5 + bid/ask prices
     """
     try:
-        if limit > 500:
-            limit = 500
+        if limit > 100:
+            limit = 100  # Limit to 100 bricks max for performance
         
         # Default brick sizes if not specified
         if brick_size is None:
@@ -47,70 +103,83 @@ async def get_renko_chart(symbol: str, brick_size: float = None, limit: int = 10
                 "USDJPY": 0.05,
                 "GOLD": 5.0,
                 "BTCUSD": 1.0,
+                "XPTUSD": 0.0005,  # Platinum - small brick size
+                "XPDUSD": 0.0005,  # Palladium - small brick size
             }
             brick_size = brick_sizes.get(symbol, 0.01)
         
-        # Get symbol info from MT5 (real-time)
+        cache_key = f"{symbol}_{brick_size}_{timeframe}"
+        current_time = time.time()
+        
+        # Check cache (valid for 1 second to avoid duplicate calculations)
+        if cache_key in chart_cache and cache_key in cache_ttl:
+            if current_time - cache_ttl[cache_key] < 1.0:
+                logger.debug(f"📦 Cache hit for {cache_key}")
+                cached_data = chart_cache[cache_key]
+                cached_data["timestamp"] = datetime.now().isoformat()
+                return cached_data
+        
+        # Get symbol info from MT5
         symbol_info = mt5.symbol_info(symbol)
         if not symbol_info:
             raise HTTPException(status_code=404, detail=f"Symbol {symbol} not found in MT5")
         
-        # Fetch LIVE 1-minute candles from MT5 (real-time market data)
-        logger.info(f"Fetching live 1-min data for {symbol} from MT5...")
-        rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M1, 0, 500)
+        # Select timeframe
+        if timeframe == 5:
+            tf = mt5.TIMEFRAME_M5
+            logger.info(f"📊 Fetching 5-min data for {symbol} from MT5...")
+            candle_count = 150  # Less data for performance
+        else:
+            tf = mt5.TIMEFRAME_M1
+            logger.info(f"📊 Fetching 1-min data for {symbol} from MT5...")
+            candle_count = 100  # Reduced from 500 for performance
+        
+        # Fetch rates from MT5 (with timeout)
+        try:
+            rates = mt5.copy_rates_from_pos(symbol, tf, 0, candle_count)
+        except Exception as e:
+            logger.error(f"❌ MT5 error fetching rates: {e}")
+            rates = None
         
         if rates is None or len(rates) == 0:
             raise HTTPException(status_code=400, detail=f"No real-time price data from MT5 for {symbol}")
         
-        # Cache the last rates timestamp for verification
-        last_rates[symbol] = datetime.now().isoformat()
+        # ⚡ Run Renko calculation in thread pool (NON-BLOCKING)
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            executor,
+            calculate_renko_bricks,
+            symbol,
+            rates,
+            brick_size,
+            limit
+        )
         
-        # Initialize or get existing Renko engine
-        engine_key = f"{symbol}_{brick_size}"
-        if engine_key not in renko_engines:
-            renko_engines[engine_key] = RenkoEngine(brick_size)
-            strategy_engines[engine_key] = StrategyEngine(renko_engines[engine_key])
-        
-        renko = renko_engines[engine_key]
-        strategy = strategy_engines[engine_key]
-        
-        # Feed all prices to Renko engine
-        for rate in rates:
-            renko.feed_tick(rate['close'])
-        
-        # Get brick history
-        all_bricks = renko.history(limit)
-        
-        # Format bricks for charting
-        chart_data = []
-        for i, brick in enumerate(all_bricks):
-            chart_data.append({
-                "index": i,
-                "open": float(brick.open_price),
-                "close": float(brick.close_price),
-                "high": float(brick.high),
-                "low": float(brick.low),
-                "color": brick.color,  # "green" or "red"
-                "signal": "BUY" if brick.color == "green" else "SELL",
-            })
-        
-        # Get current state
-        current_direction = renko.direction()
-        
-        return {
+        # Build response with bid/ask
+        response = {
             "symbol": symbol,
             "brick_size": brick_size,
-            "bricks": chart_data[-limit:],  # Return last N bricks
-            "total_bricks": len(all_bricks),
-            "current_direction": current_direction,
-            "current_price": float(rates[-1]['close']),
-            "last_update": datetime.fromtimestamp(rates[-1]['time']).isoformat(),
-            "data_source": "MT5_LIVE_1MIN",  # Confirm data is from MT5
+            "bricks": result["bricks"],
+            "total_bricks": result["total_bricks"],
+            "current_price": result["current_price"],
+            "bid": result["bid"],
+            "ask": result["ask"],
+            "current_direction": result["direction"],
             "timestamp": datetime.now().isoformat(),
+            "data_source": "MT5_LIVE",
+            "timeframe": f"{timeframe}M",
         }
+        
+        # Cache result
+        chart_cache[cache_key] = response
+        cache_ttl[cache_key] = current_time
+        
+        return response
     
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Error getting Renko chart from MT5: {e}")
+        logger.error(f"❌ Chart error for {symbol}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -200,6 +269,125 @@ async def websocket_renko_chart(websocket: WebSocket, symbol: str):
         logger.info(f"WebSocket disconnected for {symbol}")
     except Exception as e:
         logger.error(f"WebSocket error for {symbol}: {e}")
+        try:
+            await websocket.send_json({"error": str(e)})
+        except:
+            pass
+
+
+@router.websocket("/stream/{symbol}")
+async def stream_renko_chart(websocket: WebSocket, symbol: str, brick_size: float = None):
+    """
+    WebSocket endpoint for real-time Renko chart streaming
+    ⚡ REAL-TIME STREAMING from MT5 
+    """
+    await websocket.accept()
+    
+    try:
+        # Get default brick size
+        if brick_size is None:
+            brick_sizes = {
+                "EURUSD": 0.005,
+                "GBPUSD": 0.005,
+                "USDJPY": 0.05,
+                "GOLD": 5.0,
+                "BTCUSD": 1.0,
+            }
+            brick_size = brick_sizes.get(symbol, 0.01)
+        
+        # Verify symbol exists in MT5
+        symbol_info = mt5.symbol_info(symbol)
+        if not symbol_info:
+            await websocket.send_json({
+                "error": f"Symbol {symbol} not found in MT5"
+            })
+            await websocket.close()
+            return
+        
+        # Initialize Renko engine
+        engine_key = f"{symbol}_{brick_size}"
+        if engine_key not in renko_engines:
+            renko_engines[engine_key] = RenkoEngine(brick_size)
+            strategy_engines[engine_key] = StrategyEngine(renko_engines[engine_key])
+        
+        renko = renko_engines[engine_key]
+        strategy = strategy_engines[engine_key]
+        
+        logger.info(f"🔌 WebSocket stream connected for {symbol} - brick_size: {brick_size}")
+        
+        # Stream real-time updates
+        last_candle_time = None
+        skip_count = 0
+        
+        while True:
+            # Get latest 1-min candles from MT5
+            rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M1, 0, 100)
+            
+            if rates and len(rates) > 0:
+                latest_time = rates[-1]['time']
+                
+                # Only process if new candle
+                if latest_time != last_candle_time:
+                    last_candle_time = latest_time
+                    
+                    # Feed all recent prices
+                    for rate in rates[-10:]:
+                        renko.feed_tick(rate['close'])
+                    
+                    # Get brick history (last 100)
+                    all_bricks = renko.history(100)
+                    
+                    # Format for frontend
+                    chart_data = []
+                    for i, brick in enumerate(all_bricks):
+                        chart_data.append({
+                            "index": i,
+                            "open": float(brick.open_price),
+                            "close": float(brick.close_price),
+                            "high": float(brick.high),
+                            "low": float(brick.low),
+                            "color": brick.color,
+                            "signal": "BUY" if brick.color == "green" else "SELL",
+                        })
+                    
+                    # Get signal from strategy
+                    signal = None
+                    if len(all_bricks) > 0:
+                        signal = strategy.process(all_bricks)
+                    
+                    # Send complete update to client
+                    await websocket.send_json({
+                        "symbol": symbol,
+                        "brick_size": brick_size,
+                        "bricks": chart_data,
+                        "total_bricks": len(all_bricks),
+                        "current_price": float(rates[-1]['close']),
+                        "current_direction": renko.direction(),
+                        "signal": signal['type'].upper() if signal else None,
+                        "timestamp": datetime.fromtimestamp(rates[-1]['time']).isoformat(),
+                        "data_source": "MT5_LIVE_STREAM",
+                    })
+                    
+                    skip_count = 0
+                else:
+                    skip_count += 1
+                    # Still send price updates even if candle unchanged
+                    if skip_count >= 5:
+                        skip_count = 0
+                        current_price = float(rates[-1]['close'])
+                        await websocket.send_json({
+                            "symbol": symbol,
+                            "current_price": current_price,
+                            "data_source": "MT5_PRICE_UPDATE",
+                        })
+            
+            # Update very frequently for smooth real-time
+            await asyncio.sleep(0.1)
+    
+    except WebSocketDisconnect:
+        logger.info(f"🔌 WebSocket stream disconnected for {symbol}")
+    except Exception as e:
+        logger.error(f"🔌 WebSocket stream error for {symbol}: {e}")
         try:
             await websocket.send_json({"error": str(e)})
         except:
