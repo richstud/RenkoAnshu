@@ -33,6 +33,7 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
   const bidRef = useRef<number>(0);
   const askRef = useRef<number>(0);
   const lastTimestampRef = useRef<string>('');
+  const isPendingRef = useRef<boolean>(false);  // Prevent duplicate requests
   const [chartData, setChartData] = useState({
     symbol: '',
     brick_size: 0,
@@ -67,6 +68,13 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
   useEffect(() => {
     const fetchChart = async () => {
       try {
+        // Skip if request already pending (prevent stacked requests)
+        if (isPendingRef.current) {
+          console.log('Skipping duplicate request - one already in flight');
+          return;
+        }
+        
+        isPendingRef.current = true;
         setCalculating(true);
         const url = `${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/renko/chart/${symbol}?brick_size=${brickSize}&timeframe=${timeframe}`;
         const res = await fetch(url);
@@ -111,11 +119,15 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
         setError(errorMsg);
         setLoading(false);
         setCalculating(false);
+      } finally {
+        isPendingRef.current = false;
       }
     };
 
     fetchChart();
-    const interval = setInterval(fetchChart, 500);
+    // Increased to 2 seconds to prevent overwhelming backend with requests
+    // 500ms was causing 6+ stacked requests during 3-second calculations
+    const interval = setInterval(fetchChart, 2000);
     return () => clearInterval(interval);
   }, [symbol, brickSize, timeframe, loading]);
 
