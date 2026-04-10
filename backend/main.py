@@ -62,8 +62,12 @@ async def startup_event():
             if response.data:
                 for account in response.data:
                     if account["login"] not in mt5_manager.sessions:
-                        # Skip, just load from DB for reference
-                        pass
+                        # Add account from database to sessions
+                        mt5_manager.add_account(
+                            account["login"],
+                            account.get("password", settings.MT5_PASSWORD),
+                            account.get("server", settings.MT5_SERVER)
+                        )
                 logger.info(f"Loaded {len(response.data)} accounts from database")
         except Exception as e:
             logger.warning(f"Could not load accounts from Supabase: {e}")
