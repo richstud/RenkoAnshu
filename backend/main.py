@@ -377,17 +377,19 @@ async def execute_manual_trade(trade: TradeRequest):
             "message": f"Trade executed: {trade.trade_type.upper()} {trade.lot_size} {trade.symbol} @ {price}"
         })
         
-        # Log trade - only include fields that the table has
-        trade_data = {
-            "account_id": trade.account_id,
-            "symbol": trade.symbol,
-            "type": trade.trade_type,
-            "lot": trade.lot_size,
-            "entry_price": price,
-            "ticket": result.order,
-        }
-        
-        supabase_client.table("trades").insert(trade_data).execute()
+        # Log trade - only insert basic fields that exist
+        try:
+            trade_data = {
+                "account_id": trade.account_id,
+                "symbol": trade.symbol,
+                "type": trade.trade_type,
+                "lot": trade.lot_size,
+                "entry_price": price,
+            }
+            
+            supabase_client.table("trades").insert(trade_data).execute()
+        except Exception as db_error:
+            logger.warning(f"Could not log trade to database: {db_error}")
         
         # Broadcast trade execution to all connected clients
         await ws_manager.broadcast({
