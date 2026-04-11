@@ -183,7 +183,8 @@ class AutoTrader:
                 return
             
             balance = account_info.balance
-            lot_size = self.calculate_lot_size(balance, config['lot_size_rules'])
+            # Use lot_size directly from config instead of calculating from lot_size_rules
+            lot_size = config.get('lot_size', 0.01)  # Default to 0.01 if not specified
             
             logger.info(f"💰 Account balance: ${balance:.2f}, Lot size: {lot_size}")
             
