@@ -48,30 +48,29 @@ class AutoTrader:
             logger.error(f"❌ Failed to initialize Auto-Trader: {e}")
     
     async def load_watchlist(self):
-        """Load auto-trading watchlist from Supabase"""
+        """Load auto-trading watchlist from Supabase (using existing watchlist table)"""
         try:
             if not self.supabase_client:
                 logger.warning("Supabase client not initialized")
                 return
             
-            # Fetch enabled symbols from database
-            response = self.supabase_client.table('auto_trading_watchlist').select('*').eq('enabled', True).execute()
+            # Fetch enabled symbols from existing watchlist table where algo_enabled = true
+            response = self.supabase_client.table('watchlist').select('*').eq('algo_enabled', True).execute()
             
             for item in response.data:
                 symbol = item['symbol']
                 self.enabled_symbols[symbol] = {
                     'account_id': item['account_id'],
-                    'enabled': True,
-                    'brick_size': item.get('brick_size', 0.005),  # Default
-                    'lot_size_rules': item.get('lot_size_rules', {
-                        'balance_less_100': 0.001,
-                        'balance_101_500': 0.01,
-                        'balance_501_plus': 0.1
-                    }),
+                    'algo_enabled': True,
+                    'brick_size': item.get('brick_size', 1.0),  # Use brick_size from watchlist
+                    'lot_size': item.get('lot_size', 0.01),
+                    'use_trailing_stop': item.get('use_trailing_stop', False),
+                    'stop_loss_pips': item.get('stop_loss_pips', 50),
+                    'take_profit_pips': item.get('take_profit_pips', 100),
                     'created_at': item.get('created_at'),
                 }
             
-            logger.info(f"📋 Loaded {len(self.enabled_symbols)} symbols from watchlist")
+            logger.info(f"📋 Loaded {len(self.enabled_symbols)} symbols from watchlist (algo_enabled=true)")
         except Exception as e:
             logger.error(f"❌ Failed to load watchlist: {e}")
     
@@ -85,10 +84,16 @@ class AutoTrader:
         logger.info("🚀 Starting Auto-Trader service...")
         
         try:
+            reload_counter = 0
             while self.is_running:
+                # Reload watchlist every 30 seconds to pick up new symbols added from UI
+                if reload_counter % 30 == 0:
+                    await self.load_watchlist()
+                
                 await self.evaluate_strategy()
-                # Evaluate every 1 minute (check on 1-min candle close)
-                await asyncio.sleep(60)
+                # Evaluate every 1 second, but strategy only runs on 1-min candle close
+                await asyncio.sleep(1)
+                reload_counter += 1
         except Exception as e:
             logger.error(f"❌ Auto-Trader error: {e}")
             self.is_running = False
@@ -110,16 +115,16 @@ class AutoTrader:
         """Evaluate strategy for a specific symbol"""
         try:
             config = self.enabled_symbols.get(symbol)
-            if not config or not config['enabled']:
+            if not config or not config.get('algo_enabled', False):
                 return
             
             account_id = config['account_id']
-            brick_size = config.get('brick_size', 0.005)
+            brick_size = config.get('brick_size', 1.0)  # Default 1.0 for BTCUSD
             
             # Fetch latest 1-min candles
             rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M1, 0, 100)
             if rates is None or len(rates) == 0:
-                logger.warning(f"❌ No rate data for {symbol}")
+                logger.debug(f"No rate data for {symbol}")
                 return
             
             # Get or create Renko engine
