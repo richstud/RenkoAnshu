@@ -47,30 +47,62 @@ class AutoTrader:
         except Exception as e:
             logger.error(f"❌ Failed to initialize Auto-Trader: {e}")
     
+    def calculate_lot_size(self, balance: float) -> float:
+        """Calculate lot size based on account balance
+        
+        Rules:
+        - $0-$1000: 0.01 lot
+        - $1001-$10000: 0.1 lot
+        - $10001-$25000: 1.0 lot
+        - $25001+: 1.0 lot (max)
+        """
+        if balance <= 1000:
+            return 0.01
+        elif balance <= 10000:
+            return 0.1
+        else:
+            return 1.0
+    
     async def load_watchlist(self):
-        """Load auto-trading watchlist from Supabase (using existing watchlist table)"""
+        """Load auto-trading watchlist from Supabase for ALL accounts with enabled symbols"""
         try:
             if not self.supabase_client:
                 logger.warning("Supabase client not initialized")
                 return
             
-            # Fetch enabled symbols from existing watchlist table where algo_enabled = true
+            # Fetch all enabled symbols across all accounts
             response = self.supabase_client.table('watchlist').select('*').eq('algo_enabled', True).execute()
+            
+            # Group by account_id to track accounts and their enabled symbols
+            accounts_symbols = {}
             
             for item in response.data:
                 symbol = item['symbol']
-                self.enabled_symbols[symbol] = {
-                    'account_id': item['account_id'],
+                account_id = item['account_id']
+                
+                # Create key combining account and symbol for unique tracking
+                symbol_key = f"{account_id}_{symbol}"
+                
+                self.enabled_symbols[symbol_key] = {
+                    'symbol': symbol,
+                    'account_id': account_id,
                     'algo_enabled': True,
-                    'brick_size': item.get('brick_size', 1.0),  # Use brick_size from watchlist
-                    'lot_size': item.get('lot_size', 0.01),
+                    'brick_size': item.get('brick_size', 1.0),
                     'use_trailing_stop': item.get('use_trailing_stop', False),
                     'stop_loss_pips': item.get('stop_loss_pips', 50),
                     'take_profit_pips': item.get('take_profit_pips', 100),
                     'created_at': item.get('created_at'),
                 }
+                
+                # Track accounts
+                if account_id not in accounts_symbols:
+                    accounts_symbols[account_id] = []
+                accounts_symbols[account_id].append(symbol)
             
-            logger.info(f"📋 Loaded {len(self.enabled_symbols)} symbols from watchlist (algo_enabled=true)")
+            logger.info(f"📋 Loaded {len(self.enabled_symbols)} symbol/account pairs from watchlist")
+            for account_id, symbols in accounts_symbols.items():
+                logger.info(f"   Account {account_id}: {', '.join(symbols)}")
+        
         except Exception as e:
             logger.error(f"❌ Failed to load watchlist: {e}")
     
@@ -174,7 +206,7 @@ class AutoTrader:
     async def execute_trade(self, symbol: str, signal: str, account_id: int, config: dict):
         """Execute a trade based on signal"""
         try:
-            logger.info(f"🎯 Executing {signal} for {symbol}...")
+            logger.info(f"🎯 Executing {signal} for {symbol} on account {account_id}...")
             
             # Get account balance for lot sizing
             account_info = mt5.account_info()
@@ -183,10 +215,10 @@ class AutoTrader:
                 return
             
             balance = account_info.balance
-            # Use lot_size directly from config instead of calculating from lot_size_rules
-            lot_size = config.get('lot_size', 0.01)  # Default to 0.01 if not specified
+            # Calculate lot size based on account balance (dynamic sizing)
+            lot_size = self.calculate_lot_size(balance)
             
-            logger.info(f"💰 Account balance: ${balance:.2f}, Lot size: {lot_size}")
+            logger.info(f"💰 Account {account_id} balance: ${balance:.2f}, Calculated lot size: {lot_size}")
             
             # Close opposite position if exists
             await self.close_opposite_position(symbol, account_id)

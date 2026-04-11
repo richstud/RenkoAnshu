@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { getAccounts, getTrades, startBot, stopBot, updateSettings } from './services/api';
 import AccountsPanel from './components/AccountsPanel';
+import AccountManager from './components/AccountManager';
 import TradeDashboard from './components/TradeDashboard';
 import Controls from './components/Controls';
 import LogsViewer from './components/LogsViewer';
@@ -144,6 +145,9 @@ function App() {
       </header>
 
       <div className="space-y-4">
+        {/* Account Manager - For linking/unlinking MT5 accounts */}
+        <AccountManager />
+        
         {/* Control Row */}
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
           <div className="lg:col-span-1">
