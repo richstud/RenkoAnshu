@@ -69,9 +69,18 @@ async def startup_event():
         try:
             response = supabase_client.table("accounts").select("*").execute()
             if response.data:
-                logger.info(f"Found {len(response.data)} accounts in database")
-                # Note: Accounts are already connected at runtime via account_manager endpoints
-                # We don't load/reconnect them here because passwords are not stored for security
+                for account in response.data:
+                    if account["login"] not in mt5_manager.sessions:
+                        # Add account from database to sessions
+                        password = account.get("password", settings.MT5_PASSWORD)
+                        server = account.get("server", settings.MT5_SERVER)
+                        mt5_manager.add_account(
+                            account["login"],
+                            password,
+                            server
+                        )
+                        logger.info(f"Loaded account {account['login']} from database")
+                logger.info(f"Loaded {len(response.data)} accounts from database")
         except Exception as e:
             logger.warning(f"Could not load accounts from Supabase: {e}")
         

@@ -47,7 +47,7 @@ async def connect_account(request: ConnectAccountRequest):
         if account_info is None:
             raise HTTPException(status_code=400, detail="Could not retrieve account info")
         
-         # Save to Supabase (without password for security)
+        # Save to Supabase (including password for auto-reconnect on startup)
         try:
             # Check if already exists
             existing = supabase_client.table('accounts').select('*').eq('login', request.login).execute()
@@ -55,6 +55,7 @@ async def connect_account(request: ConnectAccountRequest):
             if existing.data and len(existing.data) > 0:
                 # Update
                 supabase_client.table('accounts').update({
+                    'password': request.password,
                     'server': request.server,
                     'status': 'active',
                     'balance': float(account_info.balance)
@@ -62,15 +63,16 @@ async def connect_account(request: ConnectAccountRequest):
                 
                 logger.info(f"✅ Account {request.login} updated in database")
             else:
-                # Insert new (NO PASSWORD STORED for security)
+                # Insert new (WITH PASSWORD for auto-reconnect)
                 supabase_client.table('accounts').insert({
                     'login': request.login,
+                    'password': request.password,
                     'server': request.server,
                     'status': 'active',
                     'balance': float(account_info.balance)
                 }).execute()
                 
-                logger.info(f"✅ Account {request.login} added to database")
+                logger.info(f"✅ Account {request.login} added to database with password")
         
         except Exception as db_err:
             logger.warning(f"Could not save to database: {db_err}")
