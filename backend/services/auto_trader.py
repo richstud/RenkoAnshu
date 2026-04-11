@@ -153,6 +153,14 @@ class AutoTrader:
             account_id = config['account_id']
             brick_size = config.get('brick_size', 1.0)  # Default 1.0 for BTCUSD
             
+            # Ensure account is connected
+            session = mt5_manager.get_session(account_id)
+            if not session:
+                logger.warning(f"Account {account_id} not found in manager")
+                return
+            
+            session.ensure_connected()
+            
             # Fetch latest 1-min candles
             rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M1, 0, 100)
             if rates is None or len(rates) == 0:
@@ -207,6 +215,14 @@ class AutoTrader:
         """Execute a trade based on signal"""
         try:
             logger.info(f"🎯 Executing {signal} for {symbol} on account {account_id}...")
+            
+            # Ensure account is connected
+            session = mt5_manager.get_session(account_id)
+            if not session:
+                logger.error(f"❌ Account {account_id} not found in manager")
+                return
+            
+            session.ensure_connected()
             
             # Get account balance for lot sizing
             account_info = mt5.account_info()
