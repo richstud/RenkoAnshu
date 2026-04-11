@@ -34,10 +34,15 @@ export default function AccountManager() {
       const res = await fetch(`${API_URL}/api/accounts`);
       if (res.ok) {
         const data = await res.json();
-        setAccounts(data || []);
+        // Handle both array response and nested response
+        const accountsList = Array.isArray(data) ? data : (data.accounts || data || []);
+        setAccounts(Array.isArray(accountsList) ? accountsList : []);
+      } else {
+        setAccounts([]);
       }
     } catch (err) {
       setError('Failed to fetch accounts');
+      setAccounts([]);
       console.error(err);
     } finally {
       setLoading(false);
@@ -149,17 +154,14 @@ export default function AccountManager() {
 
             <div>
               <label className="block text-sm font-medium mb-1">Server</label>
-              <select
+              <input
+                type="text"
                 value={formData.server}
                 onChange={(e) => setFormData({ ...formData, server: e.target.value })}
+                placeholder="e.g., XMGlobal-MT5 6, ICMarkets, XM.MT5"
                 className="w-full px-3 py-2 bg-slate-600 rounded border border-slate-500 text-white"
                 disabled={loading}
-              >
-                <option value="ICMarkets">ICMarkets</option>
-                <option value="ICMarkets-MT5">ICMarkets-MT5</option>
-                <option value="XM.MT5">XM.MT5</option>
-                <option value="FXPro.MT5">FXPro.MT5</option>
-              </select>
+              />
             </div>
 
             <div className="flex items-end">
@@ -198,7 +200,7 @@ export default function AccountManager() {
             </div>
           ) : (
             <div className="space-y-2">
-              {accounts.map((account) => (
+              {Array.isArray(accounts) && accounts.map((account) => (
                 <div
                   key={account.login}
                   className="bg-slate-700 p-4 rounded border border-slate-600 flex justify-between items-center hover:border-slate-500 transition"

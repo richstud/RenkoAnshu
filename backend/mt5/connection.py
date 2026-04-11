@@ -77,4 +77,29 @@ class MT5Manager:
     def get_session(self, login: int) -> Optional[AccountSession]:
         return self.sessions.get(login)
 
+    def connect_account(self, login: int) -> bool:
+        """Connect a specific account"""
+        session = self.sessions.get(login)
+        if not session:
+            logger.error(f"Account {login} not found in sessions")
+            return False
+        try:
+            session.connect()
+            return True
+        except Exception as e:
+            logger.error(f"Failed to connect account {login}: {e}")
+            return False
+
+    def get_account_info(self, login: int):
+        """Get account info for a specific account"""
+        session = self.sessions.get(login)
+        if not session:
+            return None
+        try:
+            session.ensure_connected()
+            return session.account_info
+        except Exception as e:
+            logger.error(f"Failed to get account info for {login}: {e}")
+            return None
+
 mt5_manager = MT5Manager()
