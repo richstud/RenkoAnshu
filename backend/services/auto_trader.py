@@ -201,6 +201,7 @@ class AutoTrader:
                     'volume': lot_size,
                     'type': mt5.ORDER_TYPE_BUY,
                     'price': entry_price,
+                    'type_filling': mt5.ORDER_FILLING_IOC,
                     'comment': f'Auto-Trade BUY - Renko {config.get("brick_size", 0.005)}'
                 })
             else:  # SELL
@@ -210,6 +211,7 @@ class AutoTrader:
                     'volume': lot_size,
                     'type': mt5.ORDER_TYPE_SELL,
                     'price': entry_price,
+                    'type_filling': mt5.ORDER_FILLING_IOC,
                     'comment': f'Auto-Trade SELL - Renko {config.get("brick_size", 0.005)}'
                 })
             
