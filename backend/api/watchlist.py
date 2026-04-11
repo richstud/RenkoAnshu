@@ -48,7 +48,7 @@ async def get_watchlist(account_id: int = Query(...)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/add")
+@router.post("/")
 async def add_to_watchlist(item: WatchlistItem, account_id: int = Query(...)):
     """
     Add symbol to watchlist and enable auto-trading
