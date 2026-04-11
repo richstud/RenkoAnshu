@@ -26,6 +26,9 @@ export default function WatchlistManager({ accountId, onUpdate }: WatchlistManag
 
   useEffect(() => {
     fetchWatchlist();
+    // Auto-refresh every 3 seconds
+    const interval = setInterval(fetchWatchlist, 3000);
+    return () => clearInterval(interval);
   }, [accountId]);
 
   const fetchWatchlist = async () => {
@@ -35,7 +38,7 @@ export default function WatchlistManager({ accountId, onUpdate }: WatchlistManag
       );
       if (res.ok) {
         const data = await res.json();
-        setWatchlist(data.data || []);
+        setWatchlist(data.symbols || []);
       }
     } catch (error) {
       console.error('Failed to fetch watchlist:', error);
@@ -49,8 +52,12 @@ export default function WatchlistManager({ accountId, onUpdate }: WatchlistManag
 
   const handleSave = async (id: number) => {
     try {
+      const item = watchlist.find(w => w.id === id);
+      if (!item) return;
+
+      // Update via PUT endpoint with symbol and brick_size
       const res = await fetch(
-        `${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/watchlist/${id}`,
+        `${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/watchlist/${item.symbol}?account_id=${accountId}`,
         {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
@@ -71,8 +78,11 @@ export default function WatchlistManager({ accountId, onUpdate }: WatchlistManag
   const handleDelete = async (id: number) => {
     if (confirm('Remove from watchlist?')) {
       try {
+        const item = watchlist.find(w => w.id === id);
+        if (!item) return;
+
         const res = await fetch(
-          `${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/watchlist/${id}`,
+          `${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/watchlist/${item.symbol}?account_id=${accountId}`,
           { method: 'DELETE' }
         );
 
@@ -89,19 +99,16 @@ export default function WatchlistManager({ accountId, onUpdate }: WatchlistManag
   const toggleAlgo = async (item: WatchlistItem) => {
     try {
       const res = await fetch(
-        `${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/algo/toggle/${item.id}`,
+        `${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/watchlist/${item.symbol}/algo?account_id=${accountId}&algo_enabled=${!item.algo_enabled}`,
         {
-          method: 'POST',
+          method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            account_id: accountId,
-            enabled: !item.algo_enabled,
-          }),
         }
       );
 
       if (res.ok) {
         fetchWatchlist();
+        onUpdate();
       }
     } catch (error) {
       console.error('Failed to toggle algo:', error);

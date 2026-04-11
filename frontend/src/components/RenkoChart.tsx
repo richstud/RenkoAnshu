@@ -27,6 +27,8 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
   const [calculating, setCalculating] = useState(false); // Show when Renko calc in progress
   const [error, setError] = useState<string | null>(null);
   const [availableSymbols, setAvailableSymbols] = useState<string[]>([]);
+  const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null);
+  const [crosshairPrice, setCrosshairPrice] = useState<number | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const bricksRef = useRef<RenkoBrick[]>([]);
   const priceRef = useRef<number>(0);
