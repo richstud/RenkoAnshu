@@ -182,11 +182,16 @@ class AutoTrader:
             # Get current brick color
             all_bricks = renko.history(10)
             if len(all_bricks) == 0:
+                logger.debug(f"No bricks yet for {symbol}")
                 return
             
             current_brick = all_bricks[-1]
             current_color = current_brick.color  # 'green' or 'red'
             last_color = self.last_brick_state.get(symbol)
+            
+            # Log Renko state (debug)
+            if last_color is None:
+                logger.debug(f"📊 [{symbol}] Renko initialized - first brick color: {current_color}, bricks: {len(all_bricks)}")
             
             # Store current color
             self.last_brick_state[symbol] = current_color
@@ -197,7 +202,7 @@ class AutoTrader:
                 return
             
             # Signal detected!
-            logger.info(f"📊 Signal detected for {symbol}: {last_color} → {current_color}")
+            logger.info(f"📊 Signal detected for {symbol}: {last_color} → {current_color}, brick_size={brick_size}")
             
             # Determine signal
             if current_color == 'green':
@@ -221,6 +226,15 @@ class AutoTrader:
             if not session:
                 logger.error(f"❌ Account {account_id} not found in manager")
                 return
+            
+            # Check connection
+            if not session.connected:
+                logger.warning(f"⚠️ Account {account_id} not connected, attempting to connect...")
+                try:
+                    session.connect()
+                except Exception as e:
+                    logger.error(f"❌ Failed to connect account {account_id}: {e}")
+                    return
             
             session.ensure_connected()
             
@@ -264,10 +278,10 @@ class AutoTrader:
                 })
             
             if ticket is None or ticket.retcode != mt5.TRADE_RETCODE_DONE:
-                logger.error(f"❌ Trade failed: {ticket.comment if ticket else 'Unknown error'}")
+                logger.error(f"❌ Trade failed for {symbol} on account {account_id}: {ticket.comment if ticket else 'Unknown error'}")
                 return
             
-            logger.info(f"✅ Trade placed! Ticket: {ticket.order}, {signal} {lot_size} {symbol} @ {entry_price}")
+            logger.info(f"✅ TRADE PLACED! Ticket: {ticket.order}, {signal} {lot_size} {symbol} @ {entry_price} on account {account_id}")
             
             # Store position
             self.open_positions[symbol] = {
