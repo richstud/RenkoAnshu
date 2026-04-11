@@ -156,33 +156,41 @@ class AutoTrader:
             # Ensure account is connected
             session = mt5_manager.get_session(account_id)
             if not session:
-                logger.warning(f"Account {account_id} not found in manager")
+                logger.warning(f"⚠️ Account {account_id} not found in manager for {symbol}")
                 return
             
-            session.ensure_connected()
+            try:
+                session.ensure_connected()
+            except Exception as e:
+                logger.error(f"❌ Failed to connect account {account_id}: {e}")
+                return
             
             # Fetch latest 1-min candles
             rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M1, 0, 100)
             if rates is None or len(rates) == 0:
-                logger.debug(f"No rate data for {symbol}")
+                logger.debug(f"⏳ No rate data yet for {symbol}")
                 return
+            
+            logger.debug(f"📈 Got {len(rates)} rates for {symbol}")
             
             # Get or create Renko engine
             engine_key = f"{symbol}_{brick_size}"
             if engine_key not in self.renko_engines:
+                logger.info(f"🏗️ Creating Renko engine for {symbol} with brick_size={brick_size}")
                 self.renko_engines[engine_key] = RenkoEngine(brick_size)
                 self.strategy_engines[engine_key] = StrategyEngine(self.renko_engines[engine_key])
             
             renko = self.renko_engines[engine_key]
             
             # Feed rates to Renko engine
+            logger.debug(f"Feeding {len(rates[-50:])} ticks to Renko for {symbol}")
             for rate in rates[-50:]:  # Last 50 rates
                 renko.feed_tick(rate['close'])
             
             # Get current brick color
             all_bricks = renko.history(10)
             if len(all_bricks) == 0:
-                logger.debug(f"No bricks yet for {symbol}")
+                logger.info(f"⏳ [{symbol}] No bricks generated yet (need more price movement with brick_size={brick_size})")
                 return
             
             current_brick = all_bricks[-1]
@@ -191,7 +199,7 @@ class AutoTrader:
             
             # Log Renko state (debug)
             if last_color is None:
-                logger.debug(f"📊 [{symbol}] Renko initialized - first brick color: {current_color}, bricks: {len(all_bricks)}")
+                logger.info(f"📊 [{symbol}] Renko initialized with {len(all_bricks)} bricks, current color: {current_color}")
             
             # Store current color
             self.last_brick_state[symbol] = current_color
