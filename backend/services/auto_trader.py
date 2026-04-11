@@ -265,6 +265,7 @@ class AutoTrader:
                 'type': mt5.ORDER_TYPE_SELL if pos_info.type == mt5.POSITION_TYPE_BUY else mt5.ORDER_TYPE_BUY,
                 'position': ticket,
                 'price': mt5.symbol_info(symbol).bid if pos_info.type == mt5.POSITION_TYPE_BUY else mt5.symbol_info(symbol).ask,
+                'type_filling': mt5.ORDER_FILLING_IOC,
                 'comment': f'Auto-Trade CLOSE'
             })
             
