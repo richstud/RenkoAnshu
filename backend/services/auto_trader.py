@@ -136,27 +136,28 @@ class AutoTrader:
         self.is_running = False
     
     async def evaluate_strategy(self):
-        """Evaluate strategy for all enabled symbols and execute trades"""
+        """Evaluate strategy for all enabled symbols on all accounts and execute trades"""
         try:
-            for symbol in list(self.enabled_symbols.keys()):
-                await self.evaluate_symbol(symbol)
+            for symbol_key in list(self.enabled_symbols.keys()):
+                await self.evaluate_symbol(symbol_key)
         except Exception as e:
             logger.error(f"❌ Strategy evaluation error: {e}")
     
-    async def evaluate_symbol(self, symbol: str):
-        """Evaluate strategy for a specific symbol"""
+    async def evaluate_symbol(self, symbol_key: str):
+        """Evaluate strategy for a specific account+symbol pair"""
         try:
-            config = self.enabled_symbols.get(symbol)
+            config = self.enabled_symbols.get(symbol_key)
             if not config or not config.get('algo_enabled', False):
                 return
             
             account_id = config['account_id']
-            brick_size = config.get('brick_size', 1.0)  # Default 1.0 for BTCUSD
+            symbol = config['symbol']  # Extract the actual symbol (e.g., 'BTCUSD')
+            brick_size = config.get('brick_size', 1.0)
             
             # Ensure account is connected
             session = mt5_manager.get_session(account_id)
             if not session:
-                logger.warning(f"⚠️ Account {account_id} not found in manager for {symbol}")
+                logger.warning(f"⚠️ Account {account_id} not found in manager")
                 return
             
             try:
@@ -165,7 +166,7 @@ class AutoTrader:
                 logger.error(f"❌ Failed to connect account {account_id}: {e}")
                 return
             
-            # Fetch latest 1-min candles
+            # Fetch latest 1-min candles using ACTUAL SYMBOL, not the key
             rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M1, 0, 100)
             if rates is None or len(rates) == 0:
                 logger.debug(f"⏳ No rate data yet for {symbol}")
@@ -195,14 +196,14 @@ class AutoTrader:
             
             current_brick = all_bricks[-1]
             current_color = current_brick.color  # 'green' or 'red'
-            last_color = self.last_brick_state.get(symbol)
+            last_color = self.last_brick_state.get(symbol_key)
             
             # Log Renko state (debug)
             if last_color is None:
                 logger.info(f"📊 [{symbol}] Renko initialized with {len(all_bricks)} bricks, current color: {current_color}")
             
-            # Store current color
-            self.last_brick_state[symbol] = current_color
+            # Store current color using the symbol_key to track per account
+            self.last_brick_state[symbol_key] = current_color
             
             # Check if color changed (new signal)
             if last_color is None or last_color == current_color:
