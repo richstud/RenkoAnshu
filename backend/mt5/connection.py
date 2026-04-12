@@ -193,14 +193,22 @@ class MT5Manager:
     def get_session(self, login: int) -> Optional[AccountSession]:
         return self.sessions.get(login)
 
-    def connect_account(self, login: int) -> bool:
-        """Connect a specific account"""
+    def connect_account(self, login: int, max_retries: int = 5) -> bool:
+        """Connect a specific account with retry logic
+        
+        Args:
+            login: Account login
+            max_retries: Maximum retry attempts
+            
+        Returns:
+            True if connected successfully, False otherwise
+        """
         session = self.sessions.get(login)
         if not session:
             logger.error(f"Account {login} not found in sessions")
             return False
         try:
-            session.connect()
+            session.connect(max_retries=max_retries)
             return True
         except Exception as e:
             logger.error(f"Failed to connect account {login}: {e}")

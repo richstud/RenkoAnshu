@@ -116,15 +116,8 @@ INFO:mt5:📊 Connection summary: 3 succeeded, 0 failed
 
 ## Deployment Instructions
 
-1. Files are already updated in E:\renko
-2. Commit and push to GitHub:
-   ```bash
-   cd e:\renko
-   git add backend/mt5/connection.py backend/main.py
-   git commit -m "Fix critical MT5 initialization bug - initialize once globally per manager"
-   git push origin main
-   ```
-3. On VPS: `git pull origin main` and restart backend
-4. Monitor logs for successful account connections
-5. Verify auto-trading service starts
-6. Test trading on all accounts
+1. Pull from GitHub
+2. Restart backend: `uvicorn backend.main:app --host 0.0.0.0 --port 8000`
+3. Monitor logs for successful account connections
+4. Verify auto-trading service starts
+5. Test trading on all accounts

@@ -164,7 +164,12 @@ class AutoTrader:
             try:
                 session.ensure_connected()
             except Exception as e:
-                logger.error(f"❌ Failed to connect account {account_id}: {e}")
+                logger.warning(f"⚠️ Account {account_id} connection issue: {e}. Will retry on next cycle.")
+                return
+            
+            # Check if account is actually connected
+            if not session.connected:
+                logger.debug(f"⏳ Account {account_id} not yet connected, skipping evaluation")
                 return
             
             # Fetch latest 1-min candles using ACTUAL SYMBOL, not the key
