@@ -109,10 +109,20 @@ function App() {
 
       if (res.ok) {
         setWatchlistSymbols([...watchlistSymbols, symbol]);
+        // Trigger immediate refresh in WatchlistManager
         setWatchlistRefresh(watchlistRefresh + 1);
+        // Also show success feedback
+        setWsNotification({ type: 'success', message: `✅ ${symbol} added to watchlist!` });
+        setTimeout(() => setWsNotification(null), 3000);
+      } else {
+        const errorData = await res.json();
+        setWsNotification({ type: 'error', message: `Failed to add ${symbol}: ${errorData.detail || 'Unknown error'}` });
+        setTimeout(() => setWsNotification(null), 3000);
       }
     } catch (error) {
       console.error('Failed to add to watchlist:', error);
+      setWsNotification({ type: 'error', message: `Error adding ${symbol} to watchlist` });
+      setTimeout(() => setWsNotification(null), 3000);
     }
   };
 
@@ -190,6 +200,7 @@ function App() {
                   <WatchlistManager 
                     accountId={selectedAccount.login}
                     onUpdate={handleWatchlistUpdate}
+                    refreshTrigger={watchlistRefresh}
                   />
                 </div>
                 <div className="mt-4">
