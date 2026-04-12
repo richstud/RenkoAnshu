@@ -17,9 +17,10 @@ type WatchlistItem = {
 interface WatchlistManagerProps {
   accountId: number;
   onUpdate: () => void;
+  refreshTrigger?: number;
 }
 
-export default function WatchlistManager({ accountId, onUpdate }: WatchlistManagerProps) {
+export default function WatchlistManager({ accountId, onUpdate, refreshTrigger }: WatchlistManagerProps) {
   const [watchlist, setWatchlist] = useState<WatchlistItem[]>([]);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editData, setEditData] = useState<Partial<WatchlistItem>>({});
@@ -29,7 +30,7 @@ export default function WatchlistManager({ accountId, onUpdate }: WatchlistManag
     // Auto-refresh every 3 seconds
     const interval = setInterval(fetchWatchlist, 3000);
     return () => clearInterval(interval);
-  }, [accountId]);
+  }, [accountId, refreshTrigger]);
 
   const fetchWatchlist = async () => {
     try {
@@ -38,7 +39,7 @@ export default function WatchlistManager({ accountId, onUpdate }: WatchlistManag
       );
       if (res.ok) {
         const data = await res.json();
-        setWatchlist(data.symbols || []);
+        setWatchlist(data.data || data.symbols || []);
       }
     } catch (error) {
       console.error('Failed to fetch watchlist:', error);

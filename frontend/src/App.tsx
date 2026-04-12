@@ -190,6 +190,7 @@ function App() {
                   <WatchlistManager 
                     accountId={selectedAccount.login}
                     onUpdate={handleWatchlistUpdate}
+                    refreshTrigger={watchlistRefresh}
                   />
                 </div>
                 <div className="mt-4">

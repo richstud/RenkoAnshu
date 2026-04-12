@@ -28,7 +28,8 @@ export default function LivePositions({ accountId }: LivePositionsProps) {
         );
         if (res.ok) {
           const data = await res.json();
-          const openPositions = data.filter((trade: Position) => !trade.closed);
+          const trades = Array.isArray(data) ? data : (data.data || []);
+          const openPositions = trades.filter((trade: Position) => !trade.closed);
           setPositions(openPositions);
         }
       } catch (error) {
