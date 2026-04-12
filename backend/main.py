@@ -14,7 +14,6 @@ from backend.worker import bot_worker
 from backend.api.endpoints import router as api_router
 from backend.api.renko_chart import router as renko_router
 from backend.api.auto_trading import router as auto_trading_router
-from backend.api.watchlist import router as watchlist_router
 from backend.api.account_manager import router as account_manager_router
 from backend.services.auto_trader import start_auto_trading, stop_auto_trading
 from backend.websocket_manager import ws_manager
@@ -37,7 +36,6 @@ app.add_middleware(
 app.include_router(api_router)
 app.include_router(renko_router)
 app.include_router(auto_trading_router)
-app.include_router(watchlist_router)
 app.include_router(account_manager_router)
 
 class AccountPayload(BaseModel):
