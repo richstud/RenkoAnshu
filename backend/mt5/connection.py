@@ -97,9 +97,9 @@ class AccountSession:
     def disconnect(self):
         if self.connected:
             try:
-                mt5.shutdown()
+                mt5.logout()
             except Exception as e:
-                logger.warning(f"Error during MT5 shutdown: {e}")
+                logger.warning(f"Error during MT5 logout: {e}")
             self.connected = False
             logger.info(f"Disconnected account {self.login}")
 
