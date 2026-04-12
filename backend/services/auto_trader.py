@@ -87,6 +87,7 @@ class AutoTrader:
                     'symbol': symbol,
                     'account_id': account_id,
                     'algo_enabled': True,
+                    'lot_size': item.get('lot_size', 0.01),
                     'brick_size': item.get('brick_size', 1.0),
                     'use_trailing_stop': item.get('use_trailing_stop', False),
                     'stop_loss_pips': item.get('stop_loss_pips', 50),
@@ -254,10 +255,15 @@ class AutoTrader:
                 return
             
             balance = account_info.balance
-            # Calculate lot size based on account balance (dynamic sizing)
-            lot_size = self.calculate_lot_size(balance)
-            
-            logger.info(f"💰 Account {account_id} balance: ${balance:.2f}, Calculated lot size: {lot_size}")
+            # Check if manual lot size is set in watchlist config (priority over calculated)
+            manual_lot_size = config.get('lot_size')
+            if manual_lot_size and manual_lot_size > 0:
+                lot_size = manual_lot_size
+                logger.info(f"💰 Account {account_id} balance: ${balance:.2f}, Using manual lot size: {lot_size}")
+            else:
+                # Calculate lot size based on account balance (dynamic sizing) - fallback
+                lot_size = self.calculate_lot_size(balance)
+                logger.info(f"💰 Account {account_id} balance: ${balance:.2f}, Calculated lot size: {lot_size}")
             
             # Close opposite position if exists
             await self.close_opposite_position(symbol, account_id)
