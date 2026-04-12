@@ -29,6 +29,7 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
   const [availableSymbols, setAvailableSymbols] = useState<string[]>([]);
   const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null);
   const [crosshairPrice, setCrosshairPrice] = useState<number | null>(null);
+  const [showCrosshair, setShowCrosshair] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const bricksRef = useRef<RenkoBrick[]>([]);
   const priceRef = useRef<number>(0);
@@ -132,172 +133,6 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
     const interval = setInterval(fetchChart, 2000);
     return () => clearInterval(interval);
   }, [symbol, brickSize, timeframe, loading]);
-
-  // Canvas drawing
-  useEffect(() => {
-    const drawChart = () => {
-      if (!canvasRef.current || bricksRef.current.length === 0) return;
-
-      const canvas = canvasRef.current;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return;
-
-      const rect = canvas.parentElement?.getBoundingClientRect();
-      if (rect) {
-        canvas.width = rect.width;
-        canvas.height = rect.height;
-      }
-
-      const width = canvas.width;
-      const height = canvas.height;
-      const leftPadding = 80;
-      const rightPadding = 30;
-      const topPadding = 50;
-      const bottomPadding = 50;
-      const chartWidth = width - leftPadding - rightPadding;
-      const chartHeight = height - topPadding - bottomPadding;
-
-      ctx.fillStyle = '#0f172a';
-      ctx.fillRect(0, 0, width, height);
-
-      const bricks = bricksRef.current;
-      if (bricks.length === 0) return;
-
-      const allPrices = bricks.flatMap(b => [b.open, b.close, b.high, b.low]);
-      const minPrice = Math.min(...allPrices);
-      const maxPrice = Math.max(...allPrices);
-      const priceRange = maxPrice - minPrice;
-      
-      const pricePadding = priceRange * 0.05;
-      const chartMinPrice = minPrice - pricePadding;
-      const chartMaxPrice = maxPrice + pricePadding;
-      const chartPriceRange = chartMaxPrice - chartMinPrice;
-
-      const priceToY = (price: number) => {
-        return height - bottomPadding - ((price - chartMinPrice) / chartPriceRange) * chartHeight;
-      };
-
-      const bricksToShow = Math.min(bricks.length, 100);
-      const visibleBricks = bricks.slice(-bricksToShow);
-      const brickWidth = chartWidth / bricksToShow * 0.85;
-      const brickSpacing = chartWidth / bricksToShow;
-
-      // Draw Grid
-      ctx.strokeStyle = '#1e293b';
-      ctx.lineWidth = 1;
-      ctx.setLineDash([4, 4]);
-
-      const gridLines = 10;
-      for (let i = 0; i <= gridLines; i++) {
-        const price = chartMinPrice + (chartPriceRange / gridLines) * i;
-        const y = priceToY(price);
-
-        ctx.beginPath();
-        ctx.moveTo(leftPadding, y);
-        ctx.lineTo(width - rightPadding, y);
-        ctx.stroke();
-
-        ctx.setLineDash([]);
-        ctx.fillStyle = '#94a3b8';
-        ctx.font = '11px "Segoe UI", Arial';
-        ctx.textAlign = 'right';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(price.toFixed(price < 100 ? 3 : 2), leftPadding - 12, y);
-        ctx.setLineDash([4, 4]);
-      }
-
-      ctx.setLineDash([]);
-
-      // Draw axes
-      ctx.strokeStyle = '#334155';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(leftPadding, topPadding);
-      ctx.lineTo(leftPadding, height - bottomPadding);
-      ctx.lineTo(width - rightPadding, height - bottomPadding);
-      ctx.stroke();
-
-      // Draw Bricks
-      visibleBricks.forEach((brick, idx) => {
-        const xStart = leftPadding + (idx * brickSpacing) + (brickSpacing - brickWidth) / 2;
-
-        const openY = priceToY(brick.open);
-        const closeY = priceToY(brick.close);
-        const highY = priceToY(brick.high);
-        const lowY = priceToY(brick.low);
-
-        const isBullish = brick.color === 'green';
-        const mainColor = isBullish ? '#10b981' : '#ef4444';
-        const outlineColor = isBullish ? '#047857' : '#b91c1c';
-        const wickColor = isBullish ? '#059669' : '#dc2626';
-
-        // Wick
-        ctx.strokeStyle = wickColor;
-        ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        ctx.moveTo(xStart + brickWidth / 2, highY);
-        ctx.lineTo(xStart + brickWidth / 2, lowY);
-        ctx.stroke();
-
-        // Body
-        const bodyTop = Math.min(openY, closeY);
-        const bodyBottom = Math.max(openY, closeY);
-        const bodyHeight = Math.max(bodyBottom - bodyTop, 2);
-
-        ctx.fillStyle = mainColor;
-        ctx.fillRect(xStart, bodyTop, brickWidth, bodyHeight);
-
-        ctx.strokeStyle = outlineColor;
-        ctx.lineWidth = 1.5;
-        ctx.strokeRect(xStart, bodyTop, brickWidth, bodyHeight);
-      });
-
-      // Draw Info
-      const lastBrick = bricks[bricks.length - 1];
-      const isBullish = lastBrick.color === 'green';
-      const direction = isBullish ? '▲' : '▼';
-      const directionColor = isBullish ? '#10b981' : '#ef4444';
-
-      ctx.fillStyle = '#f1f5f9';
-      ctx.font = 'bold 20px "Segoe UI", Arial';
-      ctx.textAlign = 'left';
-      ctx.textBaseline = 'top';
-      ctx.fillText(`${symbol} - Renko`, leftPadding, 10);
-
-      ctx.fillStyle = directionColor;
-      ctx.font = 'bold 28px "Segoe UI", Arial';
-      ctx.fillText(`${direction} $${priceRef.current.toFixed(priceRef.current < 100 ? 2 : 2)}`, leftPadding, 32);
-
-      const infoBoxX = width - rightPadding - 220;
-      const infoBoxY = topPadding;
-      const boxWidth = 210;
-      const boxHeight = 60;
-
-      ctx.fillStyle = 'rgba(30, 41, 59, 0.9)';
-      ctx.fillRect(infoBoxX, infoBoxY, boxWidth, boxHeight);
-
-      ctx.strokeStyle = '#475569';
-      ctx.lineWidth = 1;
-      ctx.strokeRect(infoBoxX, infoBoxY, boxWidth, boxHeight);
-
-      ctx.fillStyle = '#cbd5e1';
-      ctx.font = '12px "Segoe UI", Arial';
-      ctx.textAlign = 'left';
-      ctx.textBaseline = 'top';
-
-      ctx.fillText(`Brick: $${chartData.brick_size}`, infoBoxX + 10, infoBoxY + 8);
-      ctx.fillText(`Total Bricks: ${chartData.total_bricks}`, infoBoxX + 10, infoBoxY + 27);
-      ctx.fillText(`Trend: ${isBullish ? 'UPTREND' : 'DOWNTREND'}`, infoBoxX + 10, infoBoxY + 46);
-
-      ctx.fillStyle = directionColor;
-      ctx.font = 'bold 12px "Segoe UI", Arial';
-      ctx.textAlign = 'right';
-      ctx.fillText(isBullish ? 'LONG' : 'SHORT', infoBoxX + boxWidth - 10, infoBoxY + 46);
-    };
-
-    const animationFrame = setInterval(drawChart, 100);
-    return () => clearInterval(animationFrame);
-  }, [symbol, chartData.brick_size, chartData.total_bricks]);
 
   // Canvas drawing - uses refs so it redraws WITHOUT state updates
   useEffect(() => {
@@ -464,12 +299,111 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
       ctx.font = 'bold 12px "Segoe UI", Arial';
       ctx.textAlign = 'right';
       ctx.fillText(isBullish ? 'LONG' : 'SHORT', infoBoxX + boxWidth - 10, infoBoxY + 46);
+
+      // ===== Draw Crosshair =====
+      if (showCrosshair && mousePos && crosshairPrice !== null) {
+        const { x, y } = mousePos;
+
+        // Vertical line
+        ctx.strokeStyle = 'rgba(248, 113, 113, 0.6)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.moveTo(x, topPadding);
+        ctx.lineTo(x, height - bottomPadding);
+        ctx.stroke();
+
+        // Horizontal line
+        ctx.strokeStyle = 'rgba(34, 197, 94, 0.6)';
+        ctx.beginPath();
+        ctx.moveTo(leftPadding, y);
+        ctx.lineTo(width - rightPadding, y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Crosshair center point
+        ctx.fillStyle = '#fbbf24';
+        ctx.beginPath();
+        ctx.arc(x, y, 3, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Price label on the right
+        const priceText = crosshairPrice.toFixed(crosshairPrice < 100 ? 5 : 2);
+        ctx.fillStyle = 'rgba(59, 130, 246, 0.95)';
+        ctx.fillRect(width - rightPadding + 5, y - 12, 65, 24);
+        
+        ctx.strokeStyle = '#3b82f6';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(width - rightPadding + 5, y - 12, 65, 24);
+
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 11px "Segoe UI", Arial';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(priceText, width - rightPadding + 10, y);
+      }
     };
 
     // Draw continuously
     const animationFrame = setInterval(drawChart, 100);
     return () => clearInterval(animationFrame);
-  }, [symbol, chartData.brick_size, chartData.total_bricks]);
+  }, [symbol, chartData.brick_size, chartData.total_bricks, showCrosshair, mousePos, crosshairPrice]);
+
+  // Mouse movement handler for crosshair
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+
+      // Calculate price from Y coordinate
+      if (bricksRef.current.length > 0) {
+        const bricks = bricksRef.current;
+        const allPrices = bricks.flatMap(b => [b.open, b.close, b.high, b.low]);
+        const minPrice = Math.min(...allPrices);
+        const maxPrice = Math.max(...allPrices);
+        const priceRange = maxPrice - minPrice;
+        const pricePadding = priceRange * 0.05;
+        const chartMinPrice = minPrice - pricePadding;
+        const chartMaxPrice = maxPrice + pricePadding;
+        const chartPriceRange = chartMaxPrice - chartMinPrice;
+
+        const height = canvas.height;
+        const bottomPadding = 50;
+        const topPadding = 50;
+        const chartHeight = height - topPadding - bottomPadding;
+
+        // Convert Y pixel to price
+        const price = chartMinPrice + ((height - bottomPadding - y) / chartHeight) * chartPriceRange;
+
+        setMousePos({ x, y });
+        setCrosshairPrice(price);
+      }
+    };
+
+    const handleMouseEnter = () => {
+      setShowCrosshair(true);
+    };
+
+    const handleMouseLeave = () => {
+      setShowCrosshair(false);
+      setMousePos(null);
+      setCrosshairPrice(null);
+    };
+
+    canvas.addEventListener('mousemove', handleMouseMove);
+    canvas.addEventListener('mouseenter', handleMouseEnter);
+    canvas.addEventListener('mouseleave', handleMouseLeave);
+
+    return () => {
+      canvas.removeEventListener('mousemove', handleMouseMove);
+      canvas.removeEventListener('mouseenter', handleMouseEnter);
+      canvas.removeEventListener('mouseleave', handleMouseLeave);
+    };
+  }, []);
 
   if (error) {
     return (
