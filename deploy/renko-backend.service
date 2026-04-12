@@ -1,0 +1,17 @@
+[Unit]
+Description=Renko Trading Bot Backend API
+After=network.target
+
+[Service]
+Type=simple
+User=renko
+WorkingDirectory=/home/renko/renko
+Environment="PATH=/home/renko/renko/.venv/bin"
+ExecStart=/home/renko/renko/.venv/bin/python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 --workers 2
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
