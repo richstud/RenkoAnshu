@@ -350,6 +350,17 @@ class AutoTrader:
         except Exception as e:
             logger.error(f"❌ Error closing position: {e}")
     
+    def calculate_lot_size(self, balance: float, lot_size_rules: dict) -> float:
+        """Calculate lot size based on account balance"""
+        rules = lot_size_rules
+        
+        if balance < 100:
+            return rules.get('balance_less_100', 0.001)
+        elif balance <= 500:
+            return rules.get('balance_101_500', 0.01)
+        else:
+            return rules.get('balance_501_plus', 0.1)
+    
     async def log_trade(self, symbol: str, direction: str, entry_price: float, lot_size: float, account_id: int):
         """Log trade to Supabase"""
         try:
