@@ -19,7 +19,10 @@ class AccountSession:
         self.connection_attempt_count = 0
 
     def connect(self, max_retries: int = 5, initial_delay: float = 1.0):
-        """Connect to MT5 with exponential backoff retry logic
+        """Connect to MT5 account with exponential backoff retry logic
+        
+        IMPORTANT: MT5 must be initialized ONCE at manager level before calling this.
+        This method only performs mt5.login() for the account.
         
         Args:
             max_retries: Maximum number of connection attempts
@@ -27,34 +30,6 @@ class AccountSession:
         """
         for attempt in range(max_retries):
             try:
-                # Check if MT5 terminal is responding before attempting connection
-                if attempt > 0:
-                    try:
-                        platform_info = mt5.terminal_info()
-                        if not platform_info:
-                            logger.warning(f"MT5 terminal not responding, attempt {attempt + 1}/{max_retries}")
-                            delay = initial_delay * (2 ** attempt)  # Exponential backoff
-                            time.sleep(min(delay, 10))  # Cap delay at 10 seconds
-                            continue
-                    except Exception as term_check_error:
-                        logger.warning(f"MT5 terminal check failed: {term_check_error}")
-                
-                logger.info(f"Attempting to initialize MT5 (attempt {attempt + 1}/{max_retries})...")
-                if not mt5.initialize(path=settings.MT5_PATH, timeout=10000):
-                    error_info = mt5.last_error()
-                    logger.warning(f"MT5 initialize attempt {attempt + 1} failed: {error_info}")
-                    
-                    # IPC timeout typically means MT5 terminal is not running
-                    if error_info and "IPC timeout" in str(error_info):
-                        delay = initial_delay * (2 ** attempt)
-                        delay = min(delay, 10)
-                        logger.info(f"IPC timeout detected. Waiting {delay:.1f}s before retry...")
-                        time.sleep(delay)
-                        continue
-                    raise RuntimeError(f"MT5 initialize failed: {error_info}")
-                
-                time.sleep(1)  # Give MT5 time to initialize
-                
                 logger.info(f"Attempting to login account {self.login}@{self.server} (attempt {attempt + 1}/{max_retries})...")
                 if not mt5.login(int(self.login), password=self.password, server=self.server, timeout=10000):
                     error_info = mt5.last_error()
@@ -78,14 +53,14 @@ class AccountSession:
                 if attempt < max_retries - 1:
                     delay = initial_delay * (2 ** attempt)
                     delay = min(delay, 10)
-                    logger.info(f"Connection failed, retrying in {delay:.1f}s... ({attempt + 2}/{max_retries})")
+                    logger.info(f"Login failed, retrying in {delay:.1f}s... ({attempt + 2}/{max_retries})")
                     time.sleep(delay)
                 else:
                     self.connection_attempt_count += 1
                     raise
             
             except Exception as e:
-                logger.error(f"Unexpected error during connection attempt {attempt + 1}: {e}")
+                logger.error(f"Unexpected error during login attempt {attempt + 1}: {e}")
                 if attempt < max_retries - 1:
                     delay = initial_delay * (2 ** attempt)
                     delay = min(delay, 10)
@@ -126,6 +101,7 @@ class AccountSession:
 class MT5Manager:
     def __init__(self):
         self.sessions: Dict[int, AccountSession] = {}
+        self.mt5_initialized = False
 
     def add_account(self, login: int, password: str, server: str):
         self.sessions[login] = AccountSession(login, password, server)
@@ -136,7 +112,7 @@ class MT5Manager:
             session.disconnect()
 
     def connect_all(self, max_retries: int = 5):
-        """Connect all accounts with improved retry logic
+        """Connect all accounts - Initialize MT5 ONCE, then login each account sequentially
         
         Args:
             max_retries: Maximum retry attempts per account
@@ -145,7 +121,40 @@ class MT5Manager:
             logger.warning("No accounts to connect")
             return
         
-        logger.info(f"🔗 Connecting {len(self.sessions)} account(s)...")
+        # Step 1: Initialize MT5 ONCE at manager level (not per account)
+        if not self.mt5_initialized:
+            logger.info("🔧 Initializing MT5 library (global)...")
+            for init_attempt in range(max_retries):
+                try:
+                    if not mt5.initialize(path=settings.MT5_PATH, timeout=10000):
+                        error_info = mt5.last_error()
+                        logger.warning(f"MT5 initialize attempt {init_attempt + 1} failed: {error_info}")
+                        
+                        if error_info and "IPC timeout" in str(error_info):
+                            delay = 1.0 * (2 ** init_attempt)
+                            delay = min(delay, 10)
+                            logger.info(f"IPC timeout. Waiting {delay:.1f}s before retry...")
+                            time.sleep(delay)
+                            continue
+                        raise RuntimeError(f"MT5 initialize failed: {error_info}")
+                    
+                    self.mt5_initialized = True
+                    logger.info("✅ MT5 library initialized successfully")
+                    time.sleep(1)  # Give MT5 time to stabilize
+                    break
+                
+                except Exception as e:
+                    if init_attempt < max_retries - 1:
+                        delay = 1.0 * (2 ** init_attempt)
+                        delay = min(delay, 10)
+                        logger.warning(f"MT5 init error, retrying in {delay:.1f}s: {e}")
+                        time.sleep(delay)
+                    else:
+                        logger.error(f"❌ Failed to initialize MT5 after {max_retries} attempts: {e}")
+                        return
+        
+        # Step 2: Login all accounts sequentially to the SAME initialized MT5
+        logger.info(f"🔗 Connecting {len(self.sessions)} account(s) to initialized MT5...")
         successful_connections = 0
         failed_connections = []
         
@@ -167,8 +176,19 @@ class MT5Manager:
                 logger.warning(f"  - Account {login}: {error}")
 
     def disconnect_all(self):
+        """Disconnect all accounts and cleanup MT5"""
         for session in self.sessions.values():
             session.disconnect()
+        
+        # Cleanup MT5 library
+        if self.mt5_initialized:
+            try:
+                logger.info("🛑 Shutting down MT5 library...")
+                mt5.shutdown()
+                self.mt5_initialized = False
+                logger.info("✅ MT5 shutdown complete")
+            except Exception as e:
+                logger.warning(f"Error during MT5 shutdown: {e}")
 
     def get_session(self, login: int) -> Optional[AccountSession]:
         return self.sessions.get(login)

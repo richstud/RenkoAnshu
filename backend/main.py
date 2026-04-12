@@ -103,6 +103,11 @@ async def shutdown_event():
         logger.info("Shutting down services...")
         await stop_auto_trading()
         logger.info("Auto-trading service stopped")
+        
+        # Disconnect all MT5 accounts and shutdown MT5 library
+        logger.info("Disconnecting MT5 accounts...")
+        mt5_manager.disconnect_all()
+        logger.info("MT5 disconnected")
     except Exception as e:
         logger.error(f"Shutdown error: {e}")
 
