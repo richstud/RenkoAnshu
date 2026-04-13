@@ -208,7 +208,11 @@ function App() {
                   <LivePositions accountId={selectedAccount.login} />
                 </div>
                 <div className="mt-4">
-                  <RenkoChart symbol={selectedSymbol || 'EURUSD'} />
+                  <RenkoChart 
+                    symbol={selectedSymbol || 'EURUSD'} 
+                    accountId={selectedAccount.login}
+                    onAddToWatchlist={handleAddToWatchlist}
+                  />
                 </div>
               </>
             ) : (

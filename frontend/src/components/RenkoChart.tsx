@@ -14,9 +14,11 @@ interface RenkoBrick {
 interface RenkoChartProps {
   symbol: string;
   brickSize?: number;
+  accountId?: number;
+  onAddToWatchlist?: (symbol: string) => void;
 }
 
-export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBrickSize }: RenkoChartProps) {
+export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBrickSize, accountId, onAddToWatchlist }: RenkoChartProps) {
   const [symbol, setSymbol] = useState<string>(initialSymbol || 'EURUSD');
   const [brickSize, setBrickSize] = useState<number>(initialBrickSize || 0.005);
   const [timeframe, setTimeframe] = useState<number>(1); // 1 or 5 minutes
@@ -43,6 +45,7 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
   const showCrosshairRef = useRef<boolean>(false);
   const [symbolSearch, setSymbolSearch] = useState<string>('');
   const [showDropdown, setShowDropdown] = useState<boolean>(false);
+  const [addedToWatchlist, setAddedToWatchlist] = useState<string | null>(null);
 
   const filteredSymbols = availableSymbols.filter(s =>
     s.toLowerCase().includes(symbolSearch.toLowerCase())
@@ -489,7 +492,7 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
   return (
     <div className="bg-slate-900 rounded-lg border border-slate-700 overflow-hidden">
       {/* Controls */}
-      <div className="p-4 bg-slate-800 border-b border-slate-700 grid grid-cols-3 gap-3">
+      <div className="p-4 bg-slate-800 border-b border-slate-700 grid grid-cols-4 gap-3">
         {/* Symbol Search */}
         <div className="relative">
           <label className="text-xs text-slate-400 block mb-1">Symbol ({availableSymbols.length} available)</label>
@@ -516,6 +519,7 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
                     setSymbol(s);
                     setSymbolSearch('');
                     setShowDropdown(false);
+                    setAddedToWatchlist(null);
                     setLoading(true);
                   }}
                   className={`px-3 py-2 cursor-pointer text-sm hover:bg-slate-600 ${s === symbol ? 'bg-emerald-900/50 text-emerald-300' : 'text-white'}`}
@@ -579,6 +583,33 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
               5M
             </button>
           </div>
+        </div>
+
+        {/* Add to Watchlist */}
+        <div>
+          <label className="text-xs text-slate-400 block mb-1">Watchlist</label>
+          {onAddToWatchlist ? (
+            addedToWatchlist === symbol ? (
+              <div className="w-full px-3 py-2 bg-emerald-900/60 border border-emerald-600 rounded text-emerald-300 text-sm text-center">
+                + Added!
+              </div>
+            ) : (
+              <button
+                onClick={() => {
+                  onAddToWatchlist(symbol);
+                  setAddedToWatchlist(symbol);
+                  setTimeout(() => setAddedToWatchlist(null), 4000);
+                }}
+                className="w-full px-3 py-2 bg-blue-600 hover:bg-blue-500 border border-blue-500 rounded text-white text-sm font-medium transition"
+              >
+                + Add {symbol}
+              </button>
+            )
+          ) : (
+            <div className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-slate-500 text-sm text-center">
+              Select account first
+            </div>
+          )}
         </div>
       </div>
 
