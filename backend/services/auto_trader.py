@@ -205,20 +205,24 @@ class AutoTrader:
             renko = self.renko_engines[engine_key]
             
             # ─── CRITICAL FIX: only feed candles we haven't seen yet ───────────
+            # Always sort ascending (oldest→newest) regardless of MT5 return order
+            rates_sorted = sorted(rates, key=lambda r: int(r['time']))
+
             last_fed_time = self.last_candle_times.get(engine_key, 0)
             if last_fed_time == 0:
                 # First run: initialize engine with full history
-                new_rates = list(rates)
+                new_rates = rates_sorted
                 logger.info(f"📊 Initializing Renko engine for {symbol} with {len(new_rates)} historical candles")
             else:
-                # Subsequent runs: only NEW candles (time > last fed)
-                new_rates = [r for r in rates if int(r['time']) > last_fed_time]
-            
+                # Subsequent runs: only NEW candles (strictly after last fed time)
+                new_rates = [r for r in rates_sorted if int(r['time']) > last_fed_time]
+
             if new_rates:
                 for rate in new_rates:
                     renko.feed_tick(rate['close'])
-                self.last_candle_times[engine_key] = int(new_rates[-1]['time'])
-                logger.debug(f"Fed {len(new_rates)} new candle(s) to {symbol} Renko engine")
+                # Use max() to guarantee we always store the most recent time
+                self.last_candle_times[engine_key] = max(int(r['time']) for r in new_rates)
+                logger.debug(f"Fed {len(new_rates)} new candle(s) to {symbol} Renko engine (last_time={self.last_candle_times[engine_key]})")
             # ──────────────────────────────────────────────────────────────────
             
             # Get current brick color
