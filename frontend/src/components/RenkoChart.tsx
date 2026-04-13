@@ -38,26 +38,39 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
   const mousePosRef = useRef<{ x: number; y: number } | null>(null);
   const crosshairPriceRef = useRef<number | null>(null);
   const showCrosshairRef = useRef<boolean>(false);
-  const [chartData, setChartData] = useState({
+  const [symbolSearch, setSymbolSearch] = useState<string>('');
+  const [showDropdown, setShowDropdown] = useState<boolean>(false);
+
+  const filteredSymbols = availableSymbols.filter(s =>
+    s.toLowerCase().includes(symbolSearch.toLowerCase())
+  ).slice(0, 30); // Show top 30 results
     symbol: '',
     brick_size: 0,
     current_direction: 'long',
     total_bricks: 0,
   });
 
-  // Fetch available symbols on mount
+  // Fetch ALL available symbols from MT5 on mount
   useEffect(() => {
     const fetchSymbols = async () => {
       try {
-        const res = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/tickers`);
+        const res = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/mt5/symbols`);
         if (res.ok) {
-          const response = await res.json();
-          const tickers = response.data || response;
-          const symbols = tickers.map((t: any) => t.symbol);
+          const data = await res.json();
+          const symbols: string[] = data.symbols || [];
           setAvailableSymbols(symbols);
         }
       } catch (err) {
         console.error('Failed to fetch symbols:', err);
+        // Fallback to tickers endpoint
+        try {
+          const res2 = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/tickers`);
+          if (res2.ok) {
+            const response = await res2.json();
+            const tickers = response.data || response;
+            setAvailableSymbols(tickers.map((t: any) => t.symbol));
+          }
+        } catch {}
       }
     };
     fetchSymbols();
@@ -442,7 +455,7 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
       canvas.removeEventListener('mouseenter', handleMouseEnter);
       canvas.removeEventListener('mouseleave', handleMouseLeave);
     };
-  }, []);
+  }, [loading]); // Re-run when loading changes - canvas not in DOM until loading=false
 
   if (error) {
     return (
@@ -456,31 +469,44 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
     <div className="bg-slate-900 rounded-lg border border-slate-700 overflow-hidden">
       {/* Controls */}
       <div className="p-4 bg-slate-800 border-b border-slate-700 grid grid-cols-3 gap-3">
-        {/* Symbol Selector */}
-        <div>
-          <label className="text-xs text-slate-400 block mb-1">Symbol</label>
-          <select 
-            value={symbol}
+        {/* Symbol Search */}
+        <div className="relative">
+          <label className="text-xs text-slate-400 block mb-1">Symbol ({availableSymbols.length} available)</label>
+          <input
+            type="text"
+            value={symbolSearch || symbol}
             onChange={(e) => {
-              setSymbol(e.target.value);
-              setLoading(true);
+              setSymbolSearch(e.target.value);
+              setShowDropdown(true);
             }}
+            onFocus={() => {
+              setSymbolSearch('');
+              setShowDropdown(true);
+            }}
+            placeholder="Search symbol..."
             className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-emerald-500"
-          >
-            {availableSymbols.length > 0 ? (
-              availableSymbols.map(s => (
-                <option key={s} value={s}>{s}</option>
-              ))
-            ) : (
-              <>
-                <option value="EURUSD">EURUSD</option>
-                <option value="GBPUSD">GBPUSD</option>
-                <option value="GOLD">GOLD</option>
-                <option value="BTCUSD">BTCUSD</option>
-                <option value="ETHUSD">ETHUSD</option>
-              </>
-            )}
-          </select>
+          />
+          {showDropdown && filteredSymbols.length > 0 && (
+            <div className="absolute z-50 w-full mt-1 bg-slate-700 border border-slate-600 rounded shadow-xl max-h-56 overflow-y-auto">
+              {filteredSymbols.map(s => (
+                <div
+                  key={s}
+                  onClick={() => {
+                    setSymbol(s);
+                    setSymbolSearch('');
+                    setShowDropdown(false);
+                    setLoading(true);
+                  }}
+                  className={`px-3 py-2 cursor-pointer text-sm hover:bg-slate-600 ${s === symbol ? 'bg-emerald-900/50 text-emerald-300' : 'text-white'}`}
+                >
+                  {s}
+                </div>
+              ))}
+            </div>
+          )}
+          {showDropdown && (
+            <div className="fixed inset-0 z-40" onClick={() => setShowDropdown(false)} />
+          )}
         </div>
 
         {/* Brick Size */}
