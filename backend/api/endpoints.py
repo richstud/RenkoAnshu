@@ -59,6 +59,48 @@ class AlgoToggle(BaseModel):
 # TICKER ENDPOINTS
 # ===================================
 
+@router.get("/mt5/symbols")
+async def get_all_mt5_symbols(search: str = Query(default='', description="Search filter for symbol name")):
+    """Get ALL symbols available in MT5 (1000+), with optional search filter"""
+    try:
+        import MetaTrader5 as mt5
+        
+        # Get all symbols from MT5
+        all_symbols = mt5.symbols_get()
+        if all_symbols is None:
+            logger.warning("MT5 symbols_get() returned None - MT5 may not be connected")
+            # Fallback to database symbols
+            db_symbols = supabase_client.table('available_symbols').select('symbol').eq('is_active', True).execute()
+            symbol_names = [s['symbol'] for s in (db_symbols.data or [])]
+            return {"symbols": symbol_names, "count": len(symbol_names), "source": "database"}
+        
+        symbol_names = [s.name for s in all_symbols]
+        
+        # Apply search filter if provided
+        if search:
+            symbol_names = [s for s in symbol_names if search.upper() in s.upper()]
+        
+        symbol_names.sort()
+        
+        logger.info(f"Returning {len(symbol_names)} MT5 symbols (search: '{search}')")
+        return {
+            "symbols": symbol_names,
+            "count": len(symbol_names),
+            "source": "mt5"
+        }
+    except ImportError:
+        logger.warning("MetaTrader5 not installed, falling back to database symbols")
+        try:
+            db_symbols = supabase_client.table('available_symbols').select('symbol').eq('is_active', True).execute()
+            symbol_names = sorted([s['symbol'] for s in (db_symbols.data or [])])
+            return {"symbols": symbol_names, "count": len(symbol_names), "source": "database"}
+        except Exception as e2:
+            raise HTTPException(status_code=500, detail=str(e2))
+    except Exception as e:
+        logger.error(f"Error getting MT5 symbols: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/tickers")
 async def get_tickers():
     """Get all available tickers that exist in MT5"""
@@ -186,41 +228,49 @@ async def get_watchlist_item(item_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.put("/watchlist/{item_id}")
-async def update_watchlist_item(item_id: int, updates: WatchlistUpdate):
-    """Update watchlist item (SL, TP, Trail, Brick Size)"""
+
+
+@router.delete("/watchlist/{symbol}")
+async def remove_from_watchlist(symbol: str, account_id: int = Query(...)):
+    """Remove item from watchlist by symbol and account_id"""
     try:
-        # Convert to dict and remove None values
-        update_dict = {k: v for k, v in updates.dict().items() if v is not None}
-        
-        result = watchlist_manager.update_watchlist_item(item_id, **update_dict)
-        
-        if not result:
-            raise HTTPException(status_code=404, detail="Watchlist item not found")
-        
-        return {
-            "message": "Watchlist item updated",
-            "data": result
-        }
+        logger.info(f"Deleting {symbol} from watchlist for account {account_id}")
+        result = supabase_client.table("watchlist").delete().eq("account_id", account_id).eq("symbol", symbol).execute()
+        logger.info(f"Delete result: {result.data}")
+        return {"message": f"Removed {symbol} from watchlist"}
     except Exception as e:
-        logger.error(f"Error updating watchlist: {e}")
+        logger.error(f"Error removing from watchlist: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.delete("/watchlist/{item_id}")
-async def remove_from_watchlist(item_id: int):
-    """Remove item from watchlist"""
+@router.put("/watchlist/{symbol}/algo")
+async def toggle_algo_by_symbol(symbol: str, account_id: int = Query(...), algo_enabled: bool = Query(...)):
+    """Toggle algo on/off for a symbol"""
     try:
-        success = watchlist_manager.remove_from_watchlist(item_id)
-        
-        if not success:
-            raise HTTPException(status_code=404, detail="Watchlist item not found")
-        
-        return {
-            "message": "Removed from watchlist"
-        }
+        result = supabase_client.table("watchlist").update({"algo_enabled": algo_enabled}).eq("account_id", account_id).eq("symbol", symbol).execute()
+        status = "enabled" if algo_enabled else "disabled"
+        logger.info(f"Algorithm {status} for {symbol} account {account_id}")
+        return {"message": f"Algo {status} for {symbol}", "data": result.data}
     except Exception as e:
-        logger.error(f"Error removing from watchlist: {e}")
+        logger.error(f"Error toggling algo: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/watchlist/{symbol}")
+async def update_watchlist_by_symbol(symbol: str, account_id: int = Query(...), updates: WatchlistUpdate = None):
+    """Update watchlist item by symbol and account_id"""
+    try:
+        if updates is None:
+            raise HTTPException(status_code=400, detail="No update data provided")
+        update_dict = {k: v for k, v in updates.dict().items() if v is not None}
+        if not update_dict:
+            raise HTTPException(status_code=400, detail="No fields to update")
+        result = supabase_client.table("watchlist").update(update_dict).eq("account_id", account_id).eq("symbol", symbol).execute()
+        return {"message": f"Updated {symbol}", "data": result.data}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating watchlist: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -354,6 +404,102 @@ async def get_account(login: int):
         return result.data[0]
     except Exception as e:
         logger.error(f"Error getting account: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ===================================
+# MT5 LIVE POSITIONS (with real PnL)
+# ===================================
+
+@router.get("/mt5/positions")
+async def get_mt5_positions(account_id: int = Query(...)):
+    """Get real-time open positions directly from MT5 with live PnL"""
+    try:
+        import MetaTrader5 as mt5
+        
+        positions = mt5.positions_get()
+        if positions is None:
+            logger.warning("MT5 positions_get() returned None")
+            return {"count": 0, "data": [], "source": "mt5"}
+        
+        result = []
+        for pos in positions:
+            result.append({
+                "ticket": pos.ticket,
+                "symbol": pos.symbol,
+                "type": "buy" if pos.type == 0 else "sell",
+                "volume": pos.volume,
+                "open_price": pos.price_open,
+                "current_price": pos.price_current,
+                "sl": pos.sl,
+                "tp": pos.tp,
+                "profit": round(pos.profit, 2),
+                "swap": round(pos.swap, 2),
+                "commission": round(pos.commission, 2),
+                "open_time": pos.time,
+                "comment": pos.comment,
+            })
+        
+        return {"count": len(result), "data": result, "source": "mt5"}
+    except ImportError:
+        logger.warning("MT5 not available - falling back to database trades")
+        # Fallback to DB trades
+        try:
+            db_res = supabase_client.table("trades").select("*").eq("account_id", account_id).eq("closed", False).execute()
+            return {"count": len(db_res.data or []), "data": db_res.data or [], "source": "database"}
+        except Exception as e2:
+            raise HTTPException(status_code=500, detail=str(e2))
+    except Exception as e:
+        logger.error(f"Error getting MT5 positions: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/mt5/history")
+async def get_mt5_history(account_id: int = Query(...), days: int = Query(default=2)):
+    """Get closed trades history from MT5 for the last N days"""
+    try:
+        import MetaTrader5 as mt5
+        from datetime import datetime, timedelta
+        
+        date_to = datetime.now()
+        date_from = date_to - timedelta(days=days)
+        
+        deals = mt5.history_deals_get(date_from, date_to)
+        if deals is None:
+            logger.warning("MT5 history_deals_get() returned None")
+            return {"count": 0, "data": [], "source": "mt5"}
+        
+        result = []
+        for deal in deals:
+            if deal.entry == 1:  # Only closing deals (entry=1 = deal out)
+                result.append({
+                    "ticket": deal.ticket,
+                    "order": deal.order,
+                    "symbol": deal.symbol,
+                    "type": "buy" if deal.type == 0 else "sell",
+                    "volume": deal.volume,
+                    "price": deal.price,
+                    "profit": round(deal.profit, 2),
+                    "swap": round(deal.swap, 2),
+                    "commission": round(deal.commission, 2),
+                    "time": deal.time,
+                    "comment": deal.comment,
+                })
+        
+        result.sort(key=lambda x: x["time"], reverse=True)
+        
+        return {"count": len(result), "data": result, "source": "mt5", "days": days}
+    except ImportError:
+        logger.warning("MT5 not available - falling back to database trades")
+        try:
+            from datetime import datetime, timedelta
+            cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+            db_res = supabase_client.table("trades").select("*").eq("account_id", account_id).eq("closed", True).gte("created_at", cutoff).execute()
+            return {"count": len(db_res.data or []), "data": db_res.data or [], "source": "database", "days": days}
+        except Exception as e2:
+            raise HTTPException(status_code=500, detail=str(e2))
+    except Exception as e:
+        logger.error(f"Error getting MT5 history: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

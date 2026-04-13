@@ -1,17 +1,27 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 
-interface Trade {
-  id: number;
-  account_id: number;
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+
+interface Deal {
+  ticket: number;
+  order?: number;
   symbol: string;
   type: 'buy' | 'sell';
-  lot: number;
-  entry_price: number;
+  volume: number;
+  price: number;
+  profit: number;
+  swap: number;
+  commission: number;
+  time: number;
+  comment: string;
+  // DB fallback fields
+  id?: number;
+  lot?: number;
+  entry_price?: number;
+  closed?: boolean;
+  created_at?: string;
   sl_price?: number;
   tp_price?: number;
-  closed: boolean;
-  created_at: string;
-  brick_size: number;
 }
 
 interface TradeHistoryProps {
@@ -19,169 +29,169 @@ interface TradeHistoryProps {
 }
 
 export default function TradeHistory({ accountId }: TradeHistoryProps) {
-  const [trades, setTrades] = useState<Trade[]>([]);
-  const [selectedDate, setSelectedDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [deals, setDeals] = useState<Deal[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [source, setSource] = useState<string>('');
+  const [days, setDays] = useState(2);
 
-  const fetchTradesByDate = async () => {
-    if (!accountId || !selectedDate) return;
-    
+  const fetchHistory = useCallback(async () => {
+    if (!accountId) return;
     setLoading(true);
     setError(null);
-    
     try {
-      const res = await fetch(
-        `${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/trades/by-date/${accountId}?date_str=${selectedDate}`
-      );
-      
+      const res = await fetch(`${API_URL}/api/mt5/history?account_id=${accountId}&days=${days}`);
       if (res.ok) {
         const data = await res.json();
-        setTrades(data.data || []);
+        setDeals(data.data || []);
+        setSource(data.source || 'mt5');
       } else {
-        setError('Failed to fetch trades');
+        const errText = await res.text();
+        setError(`Failed to load history: ${errText}`);
       }
     } catch (err) {
-      console.error('Error fetching trades:', err);
-      setError('Error fetching trades');
+      setError('Network error loading history');
+      console.error('Error fetching history:', err);
     } finally {
       setLoading(false);
     }
-  };
-
-  const exportToCSV = async () => {
-    if (!accountId || !selectedDate) return;
-    
-    try {
-      const res = await fetch(
-        `${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/trades/export/${accountId}?date_str=${selectedDate}`
-      );
-      
-      if (res.ok) {
-        const blob = await res.blob();
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `trades_${selectedDate}_${accountId}.csv`;
-        document.body.appendChild(a);
-        a.click();
-        window.URL.revokeObjectURL(url);
-        document.body.removeChild(a);
-      } else {
-        alert('Failed to export trades');
-      }
-    } catch (err) {
-      console.error('Error exporting trades:', err);
-      alert('Error exporting trades');
-    }
-  };
+  }, [accountId, days]);
 
   useEffect(() => {
-    fetchTradesByDate();
-  }, [accountId, selectedDate]);
+    fetchHistory();
+  }, [fetchHistory]);
+
+  const exportToExcel = () => {
+    if (deals.length === 0) return;
+
+    const headers = ['Ticket', 'Symbol', 'Type', 'Volume', 'Price', 'Profit', 'Swap', 'Commission', 'Time', 'Comment'];
+    const rows = deals.map(d => [
+      d.ticket ?? d.id ?? '',
+      d.symbol,
+      d.type.toUpperCase(),
+      d.volume ?? d.lot ?? '',
+      d.price ?? d.entry_price ?? '',
+      d.profit,
+      d.swap ?? 0,
+      d.commission ?? 0,
+      d.time ? new Date(d.time * 1000).toLocaleString() : (d.created_at ? new Date(d.created_at).toLocaleString() : ''),
+      d.comment ?? '',
+    ]);
+
+    // Build CSV content (Excel-compatible UTF-8 BOM)
+    const BOM = '\uFEFF';
+    const csv = BOM + [headers, ...rows].map(row =>
+      row.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')
+    ).join('\r\n');
+
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `trade_history_${accountId}_last${days}days.csv`;
+    document.body.appendChild(a);
+    a.click();
+    URL.revokeObjectURL(url);
+    document.body.removeChild(a);
+  };
+
+  const totalProfit = deals.reduce((sum, d) => sum + (d.profit ?? 0), 0);
+  const totalSwap = deals.reduce((sum, d) => sum + (d.swap ?? 0), 0);
+  const totalCommission = deals.reduce((sum, d) => sum + (d.commission ?? 0), 0);
+
+  const getTime = (d: Deal) =>
+    d.time ? new Date(d.time * 1000).toLocaleString() : (d.created_at ? new Date(d.created_at).toLocaleString() : '—');
 
   return (
     <div className="bg-slate-800 p-4 rounded-lg">
-      <h2 className="text-xl font-semibold mb-4">📊 Trade History</h2>
-      
-      <div className="flex gap-4 mb-4">
-        <div>
-          <label className="text-sm text-slate-400 block mb-1">Date</label>
-          <input
-            type="date"
-            value={selectedDate}
-            onChange={(e) => setSelectedDate(e.target.value)}
-            className="px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm"
-          />
-        </div>
-        <div className="flex items-end gap-2">
-          <button
-            onClick={fetchTradesByDate}
-            disabled={loading}
-            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 rounded text-sm"
+      <div className="flex justify-between items-center mb-4">
+        <h2 className="text-xl font-semibold">📊 Trade History</h2>
+        <div className="flex items-center gap-2">
+          {source === 'mt5' && <span className="text-xs text-emerald-400 bg-emerald-900/30 px-2 py-1 rounded">● MT5</span>}
+          <select
+            value={days}
+            onChange={e => setDays(Number(e.target.value))}
+            className="px-2 py-1 bg-slate-700 border border-slate-600 rounded text-white text-sm"
           >
-            {loading ? 'Loading...' : 'Load Trades'}
+            <option value={1}>Today</option>
+            <option value={2}>Today + Yesterday</option>
+            <option value={7}>Last 7 days</option>
+            <option value={30}>Last 30 days</option>
+          </select>
+          <button
+            onClick={fetchHistory}
+            disabled={loading}
+            className="px-3 py-1 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 rounded text-sm"
+          >
+            {loading ? '⟳' : 'Refresh'}
           </button>
           <button
-            onClick={exportToCSV}
-            disabled={loading || trades.length === 0}
-            className="px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-slate-600 rounded text-sm"
+            onClick={exportToExcel}
+            disabled={deals.length === 0}
+            className="px-3 py-1 bg-green-600 hover:bg-green-700 disabled:bg-slate-600 rounded text-sm"
           >
-            📥 Export CSV
+            📥 Excel
           </button>
         </div>
       </div>
 
       {error && (
-        <div className="bg-red-900/50 border border-red-600 text-red-200 p-3 rounded mb-4">
+        <div className="bg-red-900/50 border border-red-600 text-red-200 p-3 rounded mb-4 text-sm">
           {error}
         </div>
       )}
 
-      {trades.length === 0 ? (
-        <div className="bg-slate-700 p-4 rounded text-slate-400 text-center">
-          No trades found for {selectedDate}
-        </div>
+      {loading && deals.length === 0 ? (
+        <div className="text-center text-slate-400 py-8">Loading history...</div>
+      ) : deals.length === 0 ? (
+        <div className="text-center text-slate-400 py-8">No closed trades in the last {days} day{days !== 1 ? 's' : ''}</div>
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm">
-            <thead>
-              <tr className="border-b border-slate-600">
-                <th className="px-3 py-2">Symbol</th>
-                <th className="px-3 py-2">Type</th>
-                <th className="px-3 py-2">Lot</th>
-                <th className="px-3 py-2">Entry Price</th>
-                <th className="px-3 py-2">SL</th>
-                <th className="px-3 py-2">TP</th>
-                <th className="px-3 py-2">Status</th>
-                <th className="px-3 py-2">Time</th>
-              </tr>
-            </thead>
-            <tbody>
-              {trades.map((trade) => (
-                <tr key={trade.id} className="border-b border-slate-700 hover:bg-slate-700">
-                  <td className="px-3 py-2 font-semibold">{trade.symbol}</td>
-                  <td className="px-3 py-2">
-                    <span
-                      className={`px-2 py-1 rounded text-xs ${
-                        trade.type === 'buy'
-                          ? 'bg-green-900/50 text-green-300'
-                          : 'bg-red-900/50 text-red-300'
-                      }`}
-                    >
-                      {trade.type.toUpperCase()}
-                    </span>
-                  </td>
-                  <td className="px-3 py-2">{trade.lot}</td>
-                  <td className="px-3 py-2">{trade.entry_price.toFixed(5)}</td>
-                  <td className="px-3 py-2 text-red-400">
-                    {trade.sl_price?.toFixed(5) || '—'}
-                  </td>
-                  <td className="px-3 py-2 text-green-400">
-                    {trade.tp_price?.toFixed(5) || '—'}
-                  </td>
-                  <td className="px-3 py-2">
-                    <span
-                      className={`text-xs px-2 py-1 rounded ${
-                        trade.closed
-                          ? 'bg-slate-600 text-slate-300'
-                          : 'bg-emerald-900/50 text-emerald-300'
-                      }`}
-                    >
-                      {trade.closed ? 'Closed' : 'Open'}
-                    </span>
-                  </td>
-                  <td className="px-3 py-2 text-xs text-slate-400">
-                    {new Date(trade.created_at).toLocaleTimeString()}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <div className="mt-3 text-sm text-slate-400">
-            Total: {trades.length} trades
+        <>
+          <div className="flex gap-4 mb-3 text-sm">
+            <span className={`font-bold ${totalProfit >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+              Net P&L: {totalProfit >= 0 ? '+' : ''}{totalProfit.toFixed(2)}
+            </span>
+            <span className="text-slate-400">Swap: {totalSwap.toFixed(2)}</span>
+            <span className="text-slate-400">Commission: {totalCommission.toFixed(2)}</span>
+            <span className="text-slate-400">{deals.length} trades</span>
           </div>
-        </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead>
+                <tr className="border-b border-slate-600 text-slate-400 text-xs">
+                  <th className="px-3 py-2">Ticket</th>
+                  <th className="px-3 py-2">Symbol</th>
+                  <th className="px-3 py-2">Type</th>
+                  <th className="px-3 py-2">Vol</th>
+                  <th className="px-3 py-2">Price</th>
+                  <th className="px-3 py-2">Profit</th>
+                  <th className="px-3 py-2">Swap</th>
+                  <th className="px-3 py-2">Time</th>
+                </tr>
+              </thead>
+              <tbody>
+                {deals.map((deal, idx) => (
+                  <tr key={deal.ticket ?? idx} className="border-b border-slate-700 hover:bg-slate-700/50 text-xs">
+                    <td className="px-3 py-2 text-slate-400">{deal.ticket ?? deal.id ?? '—'}</td>
+                    <td className="px-3 py-2 font-semibold text-blue-300">{deal.symbol}</td>
+                    <td className="px-3 py-2">
+                      <span className={`px-2 py-0.5 rounded text-xs ${deal.type === 'buy' ? 'bg-green-900/50 text-green-300' : 'bg-red-900/50 text-red-300'}`}>
+                        {deal.type.toUpperCase()}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2 text-yellow-300">{deal.volume ?? deal.lot ?? '—'}</td>
+                    <td className="px-3 py-2 font-mono">{(deal.price ?? deal.entry_price ?? 0).toFixed((deal.price ?? 0) < 100 ? 5 : 2)}</td>
+                    <td className={`px-3 py-2 font-bold font-mono ${(deal.profit ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                      {(deal.profit ?? 0) >= 0 ? '+' : ''}{(deal.profit ?? 0).toFixed(2)}
+                    </td>
+                    <td className="px-3 py-2 text-slate-400 font-mono">{(deal.swap ?? 0).toFixed(2)}</td>
+                    <td className="px-3 py-2 text-slate-400">{getTime(deal)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
     </div>
   );
