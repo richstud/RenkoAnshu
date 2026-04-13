@@ -189,8 +189,11 @@ async def remove_from_watchlist(symbol: str, account_id: int = Query(...)):
         Success status
     """
     try:
+        logger.info(f"DEBUG: Deleting {symbol} for account {account_id}")
+        
         response = supabase.table('watchlist').delete().eq('account_id', account_id).eq('symbol', symbol).execute()
         
+        logger.info(f"DEBUG: Delete response: {response}")
         logger.info(f"Removed {symbol} from watchlist for account {account_id}")
         
         return {

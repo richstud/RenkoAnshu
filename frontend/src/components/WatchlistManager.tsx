@@ -82,17 +82,24 @@ export default function WatchlistManager({ accountId, onUpdate, refreshTrigger }
         const item = watchlist.find(w => w.id === id);
         if (!item) return;
 
-        const res = await fetch(
-          `${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/watchlist/${item.symbol}?account_id=${accountId}`,
-          { method: 'DELETE' }
-        );
+        const url = `${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/watchlist/${item.symbol}?account_id=${accountId}`;
+        console.log('DELETE request to:', url);
+        
+        const res = await fetch(url, { method: 'DELETE' });
+        
+        const responseText = await res.text();
+        console.log('DELETE response status:', res.status, 'body:', responseText);
 
         if (res.ok) {
-          fetchWatchlist();
+          setWatchlist(watchlist.filter(w => w.id !== id));
           onUpdate();
+        } else {
+          console.error('Failed to delete. Status:', res.status, 'Response:', responseText);
+          alert(`Failed to delete ${item.symbol}. Please try again.`);
         }
       } catch (error) {
         console.error('Failed to delete from watchlist:', error);
+        alert('Error deleting from watchlist');
       }
     }
   };

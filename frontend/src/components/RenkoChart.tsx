@@ -143,15 +143,16 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
 
-      // Set canvas size
+      // Set canvas size - CRITICAL for proper rendering
       const rect = canvas.parentElement?.getBoundingClientRect();
-      if (rect) {
+      if (rect && (canvas.width !== rect.width || canvas.height !== rect.height)) {
         canvas.width = rect.width;
         canvas.height = rect.height;
       }
 
       const width = canvas.width;
       const height = canvas.height;
+      if (width === 0 || height === 0) return;
       const leftPadding = 80;
       const rightPadding = 30;
       const topPadding = 50;
@@ -301,7 +302,7 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
       ctx.fillText(isBullish ? 'LONG' : 'SHORT', infoBoxX + boxWidth - 10, infoBoxY + 46);
 
       // ===== Draw Crosshair =====
-      if (showCrosshair && mousePos && crosshairPrice !== null) {
+      if (showCrosshair && mousePos) {
         const { x, y } = mousePos;
 
         // Vertical line
@@ -327,20 +328,22 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
         ctx.arc(x, y, 3, 0, Math.PI * 2);
         ctx.fill();
 
-        // Price label on the right
-        const priceText = crosshairPrice.toFixed(crosshairPrice < 100 ? 5 : 2);
-        ctx.fillStyle = 'rgba(59, 130, 246, 0.95)';
-        ctx.fillRect(width - rightPadding + 5, y - 12, 65, 24);
-        
-        ctx.strokeStyle = '#3b82f6';
-        ctx.lineWidth = 1;
-        ctx.strokeRect(width - rightPadding + 5, y - 12, 65, 24);
+        // Price label on the right (only if price is available)
+        if (crosshairPrice !== null) {
+          const priceText = crosshairPrice.toFixed(crosshairPrice < 100 ? 5 : 2);
+          ctx.fillStyle = 'rgba(59, 130, 246, 0.95)';
+          ctx.fillRect(width - rightPadding + 5, y - 12, 65, 24);
+          
+          ctx.strokeStyle = '#3b82f6';
+          ctx.lineWidth = 1;
+          ctx.strokeRect(width - rightPadding + 5, y - 12, 65, 24);
 
-        ctx.fillStyle = '#ffffff';
-        ctx.font = 'bold 11px "Segoe UI", Arial';
-        ctx.textAlign = 'left';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(priceText, width - rightPadding + 10, y);
+          ctx.fillStyle = '#ffffff';
+          ctx.font = 'bold 11px "Segoe UI", Arial';
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(priceText, width - rightPadding + 10, y);
+        }
       }
     };
 
@@ -359,7 +362,10 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
 
-      // Calculate price from Y coordinate
+      // Always update mouse position
+      setMousePos({ x, y });
+
+      // Calculate price from Y coordinate if bricks are available
       if (bricksRef.current.length > 0) {
         const bricks = bricksRef.current;
         const allPrices = bricks.flatMap(b => [b.open, b.close, b.high, b.low]);
@@ -379,7 +385,6 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
         // Convert Y pixel to price
         const price = chartMinPrice + ((height - bottomPadding - y) / chartHeight) * chartPriceRange;
 
-        setMousePos({ x, y });
         setCrosshairPrice(price);
       }
     };
@@ -507,11 +512,10 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
           </div>
         ) : (
           <>
-            <div className="relative">
+            <div className="relative" style={{ height: '550px' }}>
               <canvas
                 ref={canvasRef}
-                className="w-full bg-slate-950"
-                style={{ height: '550px', display: 'block' }}
+                className="w-full h-full bg-slate-950 cursor-crosshair block"
               />
               {calculating && (
                 <div className="absolute top-4 left-4 bg-amber-900/80 border border-amber-600 rounded px-3 py-1.5">

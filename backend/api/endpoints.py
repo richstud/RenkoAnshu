@@ -5,7 +5,7 @@ New endpoints for tickers, watchlist, and market data
 
 import logging
 from typing import Optional
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from backend.services.price_manager import price_manager
@@ -396,6 +396,50 @@ async def get_trade(trade_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/trades/by-date/{account_id}")
+async def get_trades_by_date(account_id: int, date_str: str = Query(...), closed: bool = None):
+    """
+    Get trades for a specific date and account
+    
+    Args:
+        account_id: MT5 account ID
+        date_str: Date in format YYYY-MM-DD (e.g., '2026-04-13')
+        closed: Optional filter for trade status (true for closed, false for open)
+    
+    Returns:
+        List of trades for the specified date
+    """
+    try:
+        from datetime import datetime, timedelta
+        
+        # Parse the date
+        target_date = datetime.strptime(date_str, '%Y-%m-%d')
+        start_of_day = target_date.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+        end_of_day = (target_date + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+        
+        # Query trades
+        query = supabase_client.table('trades').select('*').eq('account_id', account_id)
+        query = query.gte('created_at', start_of_day).lt('created_at', end_of_day)
+        
+        if closed is not None:
+            query = query.eq('closed', closed)
+        
+        result = query.order('created_at', desc=True).execute()
+        
+        return {
+            "account_id": account_id,
+            "date": date_str,
+            "count": len(result.data),
+            "data": result.data
+        }
+    except ValueError as e:
+        logger.error(f"Invalid date format: {e}")
+        raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
+    except Exception as e:
+        logger.error(f"Error getting trades by date: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 class TradeCreate(BaseModel):
     account_id: int
     symbol: str
@@ -433,8 +477,75 @@ async def create_trade(trade: TradeCreate):
             }
         else:
             raise HTTPException(status_code=400, detail="Failed to create trade")
+     except Exception as e:
+         logger.error(f"Error creating trade: {e}")
+         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/trades/export/{account_id}")
+async def export_trades(account_id: int, date_str: str = Query(...)):
+    """
+    Export trades for a specific date to CSV format
+    
+    Args:
+        account_id: MT5 account ID
+        date_str: Date in format YYYY-MM-DD (e.g., '2026-04-13')
+    
+    Returns:
+        CSV data as downloadable file
+    """
+    try:
+        from datetime import datetime, timedelta
+        from io import StringIO
+        from fastapi.responses import StreamingResponse
+        import csv
+        
+        # Parse the date
+        target_date = datetime.strptime(date_str, '%Y-%m-%d')
+        start_of_day = target_date.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+        end_of_day = (target_date + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+        
+        # Query trades
+        query = supabase_client.table('trades').select('*').eq('account_id', account_id)
+        query = query.gte('created_at', start_of_day).lt('created_at', end_of_day)
+        result = query.order('created_at', desc=True).execute()
+        
+        # Create CSV
+        output = StringIO()
+        if result.data:
+            fieldnames = ['ID', 'Symbol', 'Type', 'Lot', 'Entry Price', 'SL Price', 'TP Price', 'Status', 'Created At', 'Brick Size']
+            writer = csv.DictWriter(output, fieldnames=fieldnames)
+            writer.writeheader()
+            
+            for trade in result.data:
+                writer.writerow({
+                    'ID': trade.get('id', ''),
+                    'Symbol': trade.get('symbol', ''),
+                    'Type': trade.get('type', '').upper(),
+                    'Lot': trade.get('lot', ''),
+                    'Entry Price': trade.get('entry_price', ''),
+                    'SL Price': trade.get('sl_price', ''),
+                    'TP Price': trade.get('tp_price', ''),
+                    'Status': 'Closed' if trade.get('closed') else 'Open',
+                    'Created At': trade.get('created_at', ''),
+                    'Brick Size': trade.get('brick_size', '')
+                })
+        else:
+            fieldnames = ['ID', 'Symbol', 'Type', 'Lot', 'Entry Price', 'SL Price', 'TP Price', 'Status', 'Created At', 'Brick Size']
+            writer = csv.DictWriter(output, fieldnames=fieldnames)
+            writer.writeheader()
+        
+        output.seek(0)
+        return StreamingResponse(
+            iter([output.getvalue()]),
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment;filename=trades_{date_str}_{account_id}.csv"}
+        )
+    except ValueError as e:
+        logger.error(f"Invalid date format: {e}")
+        raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
     except Exception as e:
-        logger.error(f"Error creating trade: {e}")
+        logger.error(f"Error exporting trades: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -511,3 +622,79 @@ async def update_global_settings(data: dict):
     except Exception as e:
         logger.error(f"Error updating settings: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ===================================
+# TRADE AUTO-CLEANUP ENDPOINTS
+# ===================================
+
+@router.post("/trades/auto-cleanup")
+async def auto_cleanup_trades(account_id: int = Query(...)):
+    """
+    Auto-cleanup old trades:
+    - Delete trades older than 2 days
+    - Keep only today and yesterday
+    """
+    try:
+        from datetime import datetime, timedelta
+        
+        today = datetime.now().date()
+        two_days_ago = (today - timedelta(days=2)).isoformat()
+        
+        logger.info(f"Starting cleanup for account {account_id}, removing trades before {two_days_ago}")
+        
+        # Get trades older than 2 days
+        old_trades_query = supabase_client.table('trades').select('id').eq('account_id', account_id).lt('created_at', two_days_ago)
+        old_trades = old_trades_query.execute()
+        
+        deleted_count = 0
+        if old_trades.data:
+            for trade in old_trades.data:
+                supabase_client.table('trades').delete().eq('id', trade['id']).execute()
+                deleted_count += 1
+                logger.info(f"Deleted old trade {trade['id']}")
+        
+        logger.info(f"Cleanup complete for account {account_id}, deleted {deleted_count} old trades")
+        
+        return {
+            "status": "success",
+            "message": f"Cleanup complete",
+            "deleted_count": deleted_count,
+            "account_id": account_id
+        }
+    except Exception as e:
+        logger.error(f"Error in auto-cleanup: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/trades/move-closed")
+async def move_closed_trades(account_id: int = Query(...)):
+    """Mark and report closed trades for archival to trade history"""
+    try:
+        # Get all closed trades from today and yesterday only
+        from datetime import datetime, timedelta
+        
+        today = datetime.now().date()
+        yesterday = (today - timedelta(days=1)).date()
+        
+        start_of_yesterday = yesterday.replace().isoformat() + "T00:00:00"
+        end_of_today = (today + timedelta(days=1)).replace().isoformat() + "T00:00:00"
+        
+        # Query for closed trades from last 2 days
+        closed_trades_query = supabase_client.table('trades').select('*').eq('account_id', account_id).eq('closed', True)
+        closed_trades_query = closed_trades_query.gte('created_at', start_of_yesterday).lt('created_at', end_of_today)
+        
+        result = closed_trades_query.execute()
+        
+        logger.info(f"Found {len(result.data)} closed trades for account {account_id} in last 2 days")
+        
+        return {
+            "status": "success",
+            "message": f"Found {len(result.data)} closed trades ready for history",
+            "count": len(result.data),
+            "data": result.data if result.data else []
+        }
+    except Exception as e:
+        logger.error(f"Error moving closed trades: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+

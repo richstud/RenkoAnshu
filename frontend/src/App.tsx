@@ -3,6 +3,7 @@ import { getAccounts, getTrades, startBot, stopBot, updateSettings } from './ser
 import AccountsPanel from './components/AccountsPanel';
 import AccountManager from './components/AccountManager';
 import TradeDashboard from './components/TradeDashboard';
+import TradeHistory from './components/TradeHistory';
 import Controls from './components/Controls';
 import LogsViewer from './components/LogsViewer';
 import TickersPanel from './components/TickersPanel';
@@ -227,6 +228,9 @@ function App() {
               />
             )}
             <TradeDashboard trades={trades} />
+            {selectedAccount && (
+              <TradeHistory accountId={selectedAccount.login} />
+            )}
             <LogsViewer />
           </div>
         </div>
