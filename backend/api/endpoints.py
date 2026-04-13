@@ -435,7 +435,7 @@ async def get_mt5_positions(account_id: int = Query(...)):
                 "tp": pos.tp,
                 "profit": round(pos.profit, 2),
                 "swap": round(pos.swap, 2),
-                "commission": round(pos.commission, 2),
+                "commission": round(getattr(pos, 'commission', 0.0), 2),
                 "open_time": pos.time,
                 "comment": pos.comment,
             })
@@ -481,7 +481,7 @@ async def get_mt5_history(account_id: int = Query(...), days: int = Query(defaul
                     "price": deal.price,
                     "profit": round(deal.profit, 2),
                     "swap": round(deal.swap, 2),
-                    "commission": round(deal.commission, 2),
+                    "commission": round(getattr(deal, 'commission', 0.0), 2),
                     "time": deal.time,
                     "comment": deal.comment,
                 })
