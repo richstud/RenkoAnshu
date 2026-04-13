@@ -231,16 +231,22 @@ class AutoTrader:
             current_color = current_brick.color  # 'green' or 'red'
             last_color = self.last_brick_state.get(symbol_key)
             
-            # Log Renko state (debug)
+            # On first run: seed last_color from second-to-last brick so we can
+            # detect a reversal that already happened before startup
             if last_color is None:
-                logger.info(f"📊 [{symbol}] Renko initialized with {len(all_bricks)} bricks, current color: {current_color}")
+                if len(all_bricks) >= 2:
+                    last_color = all_bricks[-2].color
+                    logger.info(f"📊 [{symbol}] Renko initialized: prev={last_color}, current={current_color}, brick_size={brick_size}")
+                else:
+                    # Only 1 brick — nothing to compare yet
+                    self.last_brick_state[symbol_key] = current_color
+                    return
             
             # Store current color using the symbol_key to track per account
             self.last_brick_state[symbol_key] = current_color
             
             # Check if color changed (new signal)
-            if last_color is None or last_color == current_color:
-                # No signal yet or color didn't change
+            if last_color == current_color:
                 return
             
             # Signal detected!
