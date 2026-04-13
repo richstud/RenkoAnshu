@@ -108,6 +108,9 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
         setAsk(data.ask || 0);
         setCurrentPrice(data.current_price || 0);
         
+        // Always clear error on successful fetch
+        setError(null);
+
         // Only update bricks if data changed (to avoid re-renders)
         if (data.timestamp !== lastTimestampRef.current) {
           lastTimestampRef.current = data.timestamp;
@@ -116,15 +119,16 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
           
           if (loading) {
             setBricks(data.bricks || []);
-            setChartData({
-              symbol: data.symbol,
-              brick_size: data.brick_size,
-              current_direction: data.current_direction,
-              total_bricks: data.total_bricks,
-            });
-            setError(null);
             setLoading(false);
           }
+
+          // Always update chart metadata
+          setChartData({
+            symbol: data.symbol,
+            brick_size: data.brick_size,
+            current_direction: data.current_direction,
+            total_bricks: data.total_bricks,
+          });
         }
         setCalculating(false);
       } catch (err) {
@@ -451,7 +455,7 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
       canvas.removeEventListener('mouseenter', handleMouseEnter);
       canvas.removeEventListener('mouseleave', handleMouseLeave);
     };
-  }, [loading]); // Re-run when loading changes - canvas not in DOM until loading=false
+  }, [loading, error]); // Re-run when loading/error changes - canvas not in DOM until loaded
 
   if (error) {
     return (
