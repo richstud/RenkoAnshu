@@ -477,9 +477,9 @@ async def create_trade(trade: TradeCreate):
             }
         else:
             raise HTTPException(status_code=400, detail="Failed to create trade")
-     except Exception as e:
-         logger.error(f"Error creating trade: {e}")
-         raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error creating trade: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/trades/export/{account_id}")
