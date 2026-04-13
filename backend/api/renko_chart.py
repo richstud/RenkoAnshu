@@ -50,9 +50,12 @@ def calculate_renko_bricks(symbol: str, rates: list, brick_size: float, limit: i
         # Get brick history
         all_bricks = renko.history(min(limit, 100))
         
-        # Format bricks
+        # Format bricks — only mark the FIRST brick of each new color as a signal (reversal)
         chart_data = []
+        prev_color = None
         for i, brick in enumerate(all_bricks):
+            is_reversal = (prev_color is not None and brick.color != prev_color)
+            signal = ("BUY" if brick.color == "green" else "SELL") if is_reversal else None
             chart_data.append({
                 "index": i,
                 "open": float(brick.open_price),
@@ -60,8 +63,9 @@ def calculate_renko_bricks(symbol: str, rates: list, brick_size: float, limit: i
                 "high": float(brick.high),
                 "low": float(brick.low),
                 "color": brick.color,
-                "signal": "BUY" if brick.color == "green" else "SELL",
+                "signal": signal,
             })
+            prev_color = brick.color
         
         # Get current bid/ask from latest close price
         current_price = float(rates[-1]['close'])
@@ -351,9 +355,11 @@ async def stream_renko_chart(websocket: WebSocket, symbol: str, brick_size: floa
                     # Get brick history (last 100)
                     all_bricks = renko.history(100)
                     
-                    # Format for frontend
+                    # Format for frontend — only mark reversal bricks with signal
                     chart_data = []
+                    prev_color = None
                     for i, brick in enumerate(all_bricks):
+                        is_reversal = (prev_color is not None and brick.color != prev_color)
                         chart_data.append({
                             "index": i,
                             "open": float(brick.open_price),
@@ -361,8 +367,9 @@ async def stream_renko_chart(websocket: WebSocket, symbol: str, brick_size: floa
                             "high": float(brick.high),
                             "low": float(brick.low),
                             "color": brick.color,
-                            "signal": "BUY" if brick.color == "green" else "SELL",
+                            "signal": ("BUY" if brick.color == "green" else "SELL") if is_reversal else None,
                         })
+                        prev_color = brick.color
                     
                     # Get signal from strategy
                     signal = None

@@ -23,7 +23,8 @@ class AutoTrader:
         self.enabled_symbols: Dict[str, dict] = {}  # {symbol: {account_id, enabled, brick_size, ...}}
         self.renko_engines: Dict[str, RenkoEngine] = {}
         self.strategy_engines: Dict[str, StrategyEngine] = {}
-        self.last_brick_state: Dict[str, str] = {}  # {symbol: 'green'/'red'} track last color
+        self.last_brick_state: Dict[str, str] = {}  # {symbol_key: 'green'/'red'} track last color
+        self.last_candle_times: Dict[str, int] = {}  # {engine_key: unix_ts} only feed NEW candles
         self.open_positions: Dict[str, dict] = {}  # {symbol: {ticket, direction, entry_price, ...}}
         self.is_running = False
         self.supabase_client = None
@@ -189,10 +190,22 @@ class AutoTrader:
             
             renko = self.renko_engines[engine_key]
             
-            # Feed rates to Renko engine
-            logger.debug(f"Feeding {len(rates[-50:])} ticks to Renko for {symbol}")
-            for rate in rates[-50:]:  # Last 50 rates
-                renko.feed_tick(rate['close'])
+            # ─── CRITICAL FIX: only feed candles we haven't seen yet ───────────
+            last_fed_time = self.last_candle_times.get(engine_key, 0)
+            if last_fed_time == 0:
+                # First run: initialize engine with full history
+                new_rates = list(rates)
+                logger.info(f"📊 Initializing Renko engine for {symbol} with {len(new_rates)} historical candles")
+            else:
+                # Subsequent runs: only NEW candles (time > last fed)
+                new_rates = [r for r in rates if int(r['time']) > last_fed_time]
+            
+            if new_rates:
+                for rate in new_rates:
+                    renko.feed_tick(rate['close'])
+                self.last_candle_times[engine_key] = int(new_rates[-1]['time'])
+                logger.debug(f"Fed {len(new_rates)} new candle(s) to {symbol} Renko engine")
+            # ──────────────────────────────────────────────────────────────────
             
             # Get current brick color
             all_bricks = renko.history(10)
