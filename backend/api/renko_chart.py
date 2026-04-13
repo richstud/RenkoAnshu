@@ -45,7 +45,7 @@ def calculate_renko_bricks(symbol: str, rates: list, brick_size: float, limit: i
         
         # Only feed last 50 rates to avoid expensive calculations
         for rate in rates[-50:]:
-            renko.feed_tick(rate['close'])
+            renko.feed_tick(rate['close'], int(rate['time']))
         
         # Get brick history
         all_bricks = renko.history(min(limit, 100))
@@ -64,6 +64,7 @@ def calculate_renko_bricks(symbol: str, rates: list, brick_size: float, limit: i
                 "low": float(brick.low),
                 "color": brick.color,
                 "signal": signal,
+                "time": brick.timestamp,
             })
             prev_color = brick.color
         

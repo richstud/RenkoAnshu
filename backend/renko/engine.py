@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional
 
 @dataclass
@@ -8,6 +8,7 @@ class RenkoBrick:
     high: float
     low: float
     color: str  # "green" or "red"
+    timestamp: int = 0  # Unix timestamp of when brick was formed
 
 
 class RenkoEngine:
@@ -16,7 +17,7 @@ class RenkoEngine:
         self.bricks: List[RenkoBrick] = []
         self.last_price: Optional[float] = None
 
-    def feed_tick(self, price: float) -> Optional[RenkoBrick]:
+    def feed_tick(self, price: float, timestamp: int = 0) -> Optional[RenkoBrick]:
         if self.last_price is None:
             self.last_price = price
             return None
@@ -38,6 +39,7 @@ class RenkoEngine:
                     high=brick_close,
                     low=brick_open,
                     color="green",
+                    timestamp=timestamp,
                 )
                 self.bricks.append(new_brick)
             else:
@@ -49,6 +51,7 @@ class RenkoEngine:
                     high=brick_open,
                     low=brick_close,
                     color="red",
+                    timestamp=timestamp,
                 )
                 self.bricks.append(new_brick)
             self.last_price = brick_close

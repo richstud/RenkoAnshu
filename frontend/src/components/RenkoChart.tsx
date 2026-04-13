@@ -8,6 +8,7 @@ interface RenkoBrick {
   low: number;
   color: 'green' | 'red';
   signal?: 'BUY' | 'SELL';
+  time?: number; // Unix timestamp
 }
 
 interface RenkoChartProps {
@@ -38,6 +39,7 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
   // Refs for crosshair - using refs avoids destroying/recreating the draw interval on every mouse move
   const mousePosRef = useRef<{ x: number; y: number } | null>(null);
   const crosshairPriceRef = useRef<number | null>(null);
+  const crosshairTimeRef = useRef<number | null>(null); // Unix timestamp at crosshair X position
   const showCrosshairRef = useRef<boolean>(false);
   const [symbolSearch, setSymbolSearch] = useState<string>('');
   const [showDropdown, setShowDropdown] = useState<boolean>(false);
@@ -238,6 +240,21 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
       ctx.lineTo(width - rightPadding, height - bottomPadding);
       ctx.stroke();
 
+      // ===== Draw X-axis Time Labels =====
+      ctx.fillStyle = '#64748b';
+      ctx.font = '10px "Segoe UI", Arial';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      const labelEvery = Math.max(1, Math.floor(bricksToShow / 8)); // ~8 labels max
+      for (let idx = 0; idx < visibleBricks.length; idx += labelEvery) {
+        const brick = visibleBricks[idx];
+        if (!brick.time) continue;
+        const xCenter = leftPadding + (idx * brickSpacing) + brickSpacing / 2;
+        const d = new Date(brick.time * 1000);
+        const label = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+        ctx.fillText(label, xCenter, height - bottomPadding + 6);
+      }
+
       // ===== Draw Bricks =====
       visibleBricks.forEach((brick, idx) => {
         const xStart = leftPadding + (idx * brickSpacing) + (brickSpacing - brickWidth) / 2;
@@ -376,20 +393,24 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
           ctx.fillText(priceText, leftPadding - 8, y);
         }
 
-        // Brick index label on X-axis (bottom)
+        // Time label on X-axis (bottom) — show timestamp of hovered brick
         const brickIdx = Math.floor((x - leftPadding) / brickSpacing);
         if (brickIdx >= 0 && brickIdx < visibleBricks.length) {
-          const brickLabel = `#${bricks.length - bricksToShow + brickIdx + 1}`;
+          const hoveredBrick = visibleBricks[brickIdx];
+          const timeLabel = hoveredBrick.time
+            ? new Date(hoveredBrick.time * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+            : `#${bricks.length - bricksToShow + brickIdx + 1}`;
+          const labelW = hoveredBrick.time ? 52 : 50;
           ctx.fillStyle = 'rgba(59, 130, 246, 0.95)';
-          ctx.fillRect(x - 25, height - bottomPadding + 5, 50, 22);
+          ctx.fillRect(x - labelW / 2, height - bottomPadding + 5, labelW, 22);
           ctx.strokeStyle = '#3b82f6';
           ctx.lineWidth = 1;
-          ctx.strokeRect(x - 25, height - bottomPadding + 5, 50, 22);
+          ctx.strokeRect(x - labelW / 2, height - bottomPadding + 5, labelW, 22);
           ctx.fillStyle = '#ffffff';
           ctx.font = 'bold 10px "Segoe UI", Arial';
           ctx.textAlign = 'center';
           ctx.textBaseline = 'middle';
-          ctx.fillText(brickLabel, x, height - bottomPadding + 16);
+          ctx.fillText(timeLabel, x, height - bottomPadding + 16);
         }
       }
     };
