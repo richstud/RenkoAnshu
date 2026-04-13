@@ -30,7 +30,7 @@ class AutoTrader:
         self.is_running = False
         self.supabase_client = None
         # Minimum seconds between trades per symbol (prevents rapid re-entry on noisy bricks)
-        self.MIN_TRADE_INTERVAL = 300  # 5 minutes
+        # NOTE: removed - using always-in strategy with $50 brick as noise filter
         
     async def initialize(self):
         """Initialize auto-trader service"""
@@ -246,14 +246,6 @@ class AutoTrader:
             # Signal detected!
             logger.info(f"📊 Signal detected for {symbol}: {last_color} → {current_color}, brick_size={brick_size}")
             
-            # Cooldown check — don't re-enter within MIN_TRADE_INTERVAL seconds
-            import time as _time
-            last_trade = self.last_trade_time.get(symbol_key, 0)
-            elapsed = _time.time() - last_trade
-            if elapsed < self.MIN_TRADE_INTERVAL:
-                logger.info(f"⏳ [{symbol}] Cooldown active ({int(elapsed)}s / {self.MIN_TRADE_INTERVAL}s), skipping signal")
-                return
-            
             # Determine signal
             if current_color == 'green':
                 signal = 'BUY'
@@ -338,11 +330,6 @@ class AutoTrader:
             
             logger.info(f"✅ TRADE PLACED! Ticket: {ticket.order}, {signal} {lot_size} {symbol} @ {entry_price} on account {account_id}")
             
-            # Record trade time for cooldown (keyed by account+symbol)
-            import time as _time
-            symbol_key = f"{account_id}_{symbol}"
-            self.last_trade_time[symbol_key] = _time.time()
-            
             # Store position
             self.open_positions[symbol] = {
                 'ticket': ticket.order,
@@ -360,44 +347,39 @@ class AutoTrader:
             logger.error(f"❌ Trade execution error: {e}")
     
     async def close_opposite_position(self, symbol: str, account_id: int):
-        """Close any opposite open position for the symbol"""
+        """Close any open position for the symbol directly from MT5"""
         try:
-            # Check if we have an open position
-            pos = self.open_positions.get(symbol)
-            if not pos:
-                return
-            
-            ticket = pos['ticket']
-            logger.info(f"📖 Closing opposite position (Ticket: {ticket})...")
-            
-            # Get position details
-            position = mt5.positions_get(ticket=ticket)
-            if position is None or len(position) == 0:
-                logger.warning(f"Position {ticket} not found")
+            # Check MT5 directly for open positions on this symbol
+            positions = mt5.positions_get(symbol=symbol)
+            if positions is None or len(positions) == 0:
                 self.open_positions.pop(symbol, None)
                 return
-            
-            pos_info = position[0]
-            
-            # Close position
-            close_order = mt5.order_send({
-                'action': mt5.TRADE_ACTION_DEAL,
-                'symbol': symbol,
-                'volume': pos_info.volume,
-                'type': mt5.ORDER_TYPE_SELL if pos_info.type == mt5.POSITION_TYPE_BUY else mt5.ORDER_TYPE_BUY,
-                'position': ticket,
-                'price': mt5.symbol_info(symbol).bid if pos_info.type == mt5.POSITION_TYPE_BUY else mt5.symbol_info(symbol).ask,
-                'type_filling': mt5.ORDER_FILLING_IOC,
-                'comment': f'Auto-Trade CLOSE'
-            })
-            
-            if close_order.retcode != mt5.TRADE_RETCODE_DONE:
-                logger.error(f"❌ Failed to close position: {close_order.comment}")
-                return
-            
-            logger.info(f"✅ Position closed! Ticket: {close_order.order}")
+
+            for pos_info in positions:
+                ticket = pos_info.ticket
+                logger.info(f"📖 Closing position (Ticket: {ticket}, {pos_info.volume} lots)...")
+
+                close_type = mt5.ORDER_TYPE_SELL if pos_info.type == mt5.POSITION_TYPE_BUY else mt5.ORDER_TYPE_BUY
+                close_price = mt5.symbol_info(symbol).bid if pos_info.type == mt5.POSITION_TYPE_BUY else mt5.symbol_info(symbol).ask
+
+                close_order = mt5.order_send({
+                    'action': mt5.TRADE_ACTION_DEAL,
+                    'symbol': symbol,
+                    'volume': pos_info.volume,
+                    'type': close_type,
+                    'position': ticket,
+                    'price': close_price,
+                    'type_filling': mt5.ORDER_FILLING_IOC,
+                    'comment': 'Auto-Trade CLOSE'
+                })
+
+                if close_order is None or close_order.retcode != mt5.TRADE_RETCODE_DONE:
+                    logger.error(f"❌ Failed to close position {ticket}: {close_order.comment if close_order else 'None'}")
+                else:
+                    logger.info(f"✅ Position closed! Ticket: {close_order.order}")
+
             self.open_positions.pop(symbol, None)
-        
+
         except Exception as e:
             logger.error(f"❌ Error closing position: {e}")
     
