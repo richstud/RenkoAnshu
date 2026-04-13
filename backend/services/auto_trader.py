@@ -25,9 +25,12 @@ class AutoTrader:
         self.strategy_engines: Dict[str, StrategyEngine] = {}
         self.last_brick_state: Dict[str, str] = {}  # {symbol_key: 'green'/'red'} track last color
         self.last_candle_times: Dict[str, int] = {}  # {engine_key: unix_ts} only feed NEW candles
+        self.last_trade_time: Dict[str, float] = {}  # {symbol_key: epoch} cooldown per symbol
         self.open_positions: Dict[str, dict] = {}  # {symbol: {ticket, direction, entry_price, ...}}
         self.is_running = False
         self.supabase_client = None
+        # Minimum seconds between trades per symbol (prevents rapid re-entry on noisy bricks)
+        self.MIN_TRADE_INTERVAL = 300  # 5 minutes
         
     async def initialize(self):
         """Initialize auto-trader service"""
@@ -83,13 +86,24 @@ class AutoTrader:
                 
                 # Create key combining account and symbol for unique tracking
                 symbol_key = f"{account_id}_{symbol}"
+                new_brick_size = item.get('brick_size', 1.0)
+                
+                # If brick_size changed, clear the old engine so it reinitializes
+                old_config = self.enabled_symbols.get(symbol_key)
+                if old_config and old_config.get('brick_size') != new_brick_size:
+                    old_key = f"{symbol}_{old_config['brick_size']}"
+                    self.renko_engines.pop(old_key, None)
+                    self.strategy_engines.pop(old_key, None)
+                    self.last_candle_times.pop(old_key, None)
+                    self.last_brick_state.pop(symbol_key, None)
+                    logger.info(f"🔄 Brick size changed for {symbol}: {old_config['brick_size']} -> {new_brick_size}, engine reset")
                 
                 self.enabled_symbols[symbol_key] = {
                     'symbol': symbol,
                     'account_id': account_id,
                     'algo_enabled': True,
                     'lot_size': item.get('lot_size', 0.01),
-                    'brick_size': item.get('brick_size', 1.0),
+                    'brick_size': new_brick_size,
                     'use_trailing_stop': item.get('use_trailing_stop', False),
                     'stop_loss_pips': item.get('stop_loss_pips', 50),
                     'take_profit_pips': item.get('take_profit_pips', 100),
@@ -232,6 +246,14 @@ class AutoTrader:
             # Signal detected!
             logger.info(f"📊 Signal detected for {symbol}: {last_color} → {current_color}, brick_size={brick_size}")
             
+            # Cooldown check — don't re-enter within MIN_TRADE_INTERVAL seconds
+            import time as _time
+            last_trade = self.last_trade_time.get(symbol_key, 0)
+            elapsed = _time.time() - last_trade
+            if elapsed < self.MIN_TRADE_INTERVAL:
+                logger.info(f"⏳ [{symbol}] Cooldown active ({int(elapsed)}s / {self.MIN_TRADE_INTERVAL}s), skipping signal")
+                return
+            
             # Determine signal
             if current_color == 'green':
                 signal = 'BUY'
@@ -315,6 +337,11 @@ class AutoTrader:
                 return
             
             logger.info(f"✅ TRADE PLACED! Ticket: {ticket.order}, {signal} {lot_size} {symbol} @ {entry_price} on account {account_id}")
+            
+            # Record trade time for cooldown (keyed by account+symbol)
+            import time as _time
+            symbol_key = f"{account_id}_{symbol}"
+            self.last_trade_time[symbol_key] = _time.time()
             
             # Store position
             self.open_positions[symbol] = {
