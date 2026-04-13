@@ -27,9 +27,6 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
   const [calculating, setCalculating] = useState(false); // Show when Renko calc in progress
   const [error, setError] = useState<string | null>(null);
   const [availableSymbols, setAvailableSymbols] = useState<string[]>([]);
-  const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null);
-  const [crosshairPrice, setCrosshairPrice] = useState<number | null>(null);
-  const [showCrosshair, setShowCrosshair] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const bricksRef = useRef<RenkoBrick[]>([]);
   const priceRef = useRef<number>(0);
@@ -37,6 +34,10 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
   const askRef = useRef<number>(0);
   const lastTimestampRef = useRef<string>('');
   const isPendingRef = useRef<boolean>(false);  // Prevent duplicate requests
+  // Refs for crosshair - using refs avoids destroying/recreating the draw interval on every mouse move
+  const mousePosRef = useRef<{ x: number; y: number } | null>(null);
+  const crosshairPriceRef = useRef<number | null>(null);
+  const showCrosshairRef = useRef<boolean>(false);
   const [chartData, setChartData] = useState({
     symbol: '',
     brick_size: 0,
@@ -302,8 +303,8 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
       ctx.fillText(isBullish ? 'LONG' : 'SHORT', infoBoxX + boxWidth - 10, infoBoxY + 46);
 
       // ===== Draw Crosshair =====
-      if (showCrosshair && mousePos) {
-        const { x, y } = mousePos;
+      if (showCrosshairRef.current && mousePosRef.current) {
+        const { x, y } = mousePosRef.current;
 
         // Vertical line
         ctx.strokeStyle = 'rgba(248, 113, 113, 0.6)';
@@ -328,15 +329,15 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
         ctx.arc(x, y, 3, 0, Math.PI * 2);
         ctx.fill();
 
-        // Price label on the right (only if price is available)
-        if (crosshairPrice !== null) {
-          const priceText = crosshairPrice.toFixed(crosshairPrice < 100 ? 5 : 2);
+        // Price label on Y-axis (right side)
+        if (crosshairPriceRef.current !== null) {
+          const priceText = crosshairPriceRef.current.toFixed(crosshairPriceRef.current < 100 ? 5 : 2);
           ctx.fillStyle = 'rgba(59, 130, 246, 0.95)';
-          ctx.fillRect(width - rightPadding + 5, y - 12, 65, 24);
+          ctx.fillRect(width - rightPadding + 5, y - 12, 75, 24);
           
           ctx.strokeStyle = '#3b82f6';
           ctx.lineWidth = 1;
-          ctx.strokeRect(width - rightPadding + 5, y - 12, 65, 24);
+          ctx.strokeRect(width - rightPadding + 5, y - 12, 75, 24);
 
           ctx.fillStyle = '#ffffff';
           ctx.font = 'bold 11px "Segoe UI", Arial';
@@ -344,13 +345,46 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
           ctx.textBaseline = 'middle';
           ctx.fillText(priceText, width - rightPadding + 10, y);
         }
+
+        // Price label on Y-axis (left side)
+        if (crosshairPriceRef.current !== null) {
+          const priceText = crosshairPriceRef.current.toFixed(crosshairPriceRef.current < 100 ? 5 : 2);
+          ctx.fillStyle = 'rgba(59, 130, 246, 0.95)';
+          ctx.fillRect(leftPadding - 78, y - 12, 75, 24);
+          
+          ctx.strokeStyle = '#3b82f6';
+          ctx.lineWidth = 1;
+          ctx.strokeRect(leftPadding - 78, y - 12, 75, 24);
+
+          ctx.fillStyle = '#ffffff';
+          ctx.font = 'bold 11px "Segoe UI", Arial';
+          ctx.textAlign = 'right';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(priceText, leftPadding - 8, y);
+        }
+
+        // Brick index label on X-axis (bottom)
+        const brickIdx = Math.floor((x - leftPadding) / brickSpacing);
+        if (brickIdx >= 0 && brickIdx < visibleBricks.length) {
+          const brickLabel = `#${bricks.length - bricksToShow + brickIdx + 1}`;
+          ctx.fillStyle = 'rgba(59, 130, 246, 0.95)';
+          ctx.fillRect(x - 25, height - bottomPadding + 5, 50, 22);
+          ctx.strokeStyle = '#3b82f6';
+          ctx.lineWidth = 1;
+          ctx.strokeRect(x - 25, height - bottomPadding + 5, 50, 22);
+          ctx.fillStyle = '#ffffff';
+          ctx.font = 'bold 10px "Segoe UI", Arial';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(brickLabel, x, height - bottomPadding + 16);
+        }
       }
     };
 
     // Draw continuously
     const animationFrame = setInterval(drawChart, 100);
     return () => clearInterval(animationFrame);
-  }, [symbol, chartData.brick_size, chartData.total_bricks, showCrosshair, mousePos, crosshairPrice]);
+  }, [symbol, chartData.brick_size, chartData.total_bricks]);
 
   // Mouse movement handler for crosshair
   useEffect(() => {
@@ -359,11 +393,11 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
 
     const handleMouseMove = (e: MouseEvent) => {
       const rect = canvas.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
+      const x = (e.clientX - rect.left) * (canvas.width / rect.width);
+      const y = (e.clientY - rect.top) * (canvas.height / rect.height);
 
-      // Always update mouse position
-      setMousePos({ x, y });
+      // Update refs directly (no re-render, no interval restart)
+      mousePosRef.current = { x, y };
 
       // Calculate price from Y coordinate if bricks are available
       if (bricksRef.current.length > 0) {
@@ -377,26 +411,26 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
         const chartMaxPrice = maxPrice + pricePadding;
         const chartPriceRange = chartMaxPrice - chartMinPrice;
 
-        const height = canvas.height;
+        const canvasHeight = canvas.height;
         const bottomPadding = 50;
         const topPadding = 50;
-        const chartHeight = height - topPadding - bottomPadding;
+        const chartHeight = canvasHeight - topPadding - bottomPadding;
 
         // Convert Y pixel to price
-        const price = chartMinPrice + ((height - bottomPadding - y) / chartHeight) * chartPriceRange;
+        const price = chartMinPrice + ((canvasHeight - bottomPadding - y) / chartHeight) * chartPriceRange;
 
-        setCrosshairPrice(price);
+        crosshairPriceRef.current = price;
       }
     };
 
     const handleMouseEnter = () => {
-      setShowCrosshair(true);
+      showCrosshairRef.current = true;
     };
 
     const handleMouseLeave = () => {
-      setShowCrosshair(false);
-      setMousePos(null);
-      setCrosshairPrice(null);
+      showCrosshairRef.current = false;
+      mousePosRef.current = null;
+      crosshairPriceRef.current = null;
     };
 
     canvas.addEventListener('mousemove', handleMouseMove);
