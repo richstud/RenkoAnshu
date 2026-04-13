@@ -43,12 +43,7 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
 
   const filteredSymbols = availableSymbols.filter(s =>
     s.toLowerCase().includes(symbolSearch.toLowerCase())
-  ).slice(0, 30); // Show top 30 results
-    symbol: '',
-    brick_size: 0,
-    current_direction: 'long',
-    total_bricks: 0,
-  });
+  ).slice(0, 30);
 
   // Fetch ALL available symbols from MT5 on mount
   useEffect(() => {
