@@ -138,21 +138,29 @@ class AutoTrader:
         
         self.is_running = True
         logger.info("🚀 Starting Auto-Trader service...")
-        
-        try:
-            reload_counter = 0
-            while self.is_running:
+
+        # Wait for MT5 to finish connecting before first evaluation.
+        # MT5 connects in a background thread at startup — this prevents
+        # the first N evaluations from all failing with 'not connected'.
+        await asyncio.sleep(8)
+
+        reload_counter = 0
+        while self.is_running:
+            try:
                 # Reload watchlist every 30 seconds to pick up new symbols added from UI
                 if reload_counter % 30 == 0:
                     await self.load_watchlist()
                 
                 await self.evaluate_strategy()
-                # Evaluate every 1 second, but strategy only runs on 1-min candle close
-                await asyncio.sleep(1)
-                reload_counter += 1
-        except Exception as e:
-            logger.error(f"❌ Auto-Trader error: {e}")
-            self.is_running = False
+            except Exception as e:
+                # IMPORTANT: log and continue — never let a single exception kill the loop.
+                # Previously the loop exited here which stopped all trading permanently.
+                logger.error(f"❌ Auto-Trader loop error (continuing): {e}", exc_info=True)
+            
+            await asyncio.sleep(1)
+            reload_counter += 1
+
+        logger.info("⏹️ Auto-Trader loop exited")
     
     async def stop(self):
         """Stop the auto-trading service"""
@@ -502,15 +510,8 @@ class AutoTrader:
         }
 
 
-# Global instance
+# Global instance — created once by start_auto_trading() at startup
 auto_trader: Optional[AutoTrader] = None
-
-def get_auto_trader_instance() -> Optional[AutoTrader]:
-    """Return the running auto_trader instance (for use by other modules)"""
-    return auto_trader
-
-# Alias for convenience
-auto_trader_instance = auto_trader  # updated by start_auto_trading
 
 async def get_auto_trader() -> AutoTrader:
     """Get or create global auto-trader instance"""
