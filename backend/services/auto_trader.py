@@ -486,6 +486,13 @@ class AutoTrader:
 # Global instance
 auto_trader: Optional[AutoTrader] = None
 
+def get_auto_trader_instance() -> Optional[AutoTrader]:
+    """Return the running auto_trader instance (for use by other modules)"""
+    return auto_trader
+
+# Alias for convenience
+auto_trader_instance = auto_trader  # updated by start_auto_trading
+
 async def get_auto_trader() -> AutoTrader:
     """Get or create global auto-trader instance"""
     global auto_trader
