@@ -337,9 +337,26 @@ class AutoTrader:
             return None
 
         balance = account_info.balance
+        free_margin = account_info.margin_free
         manual_lot_size = config.get('lot_size')
         lot_size = manual_lot_size if (manual_lot_size and manual_lot_size > 0) else self.calculate_lot_size(balance)
-        logger.info(f"💰 Account {account_id} balance: ${balance:.2f}, Lot size: {lot_size}")
+
+        # Guard: check margin required for the requested lot size.
+        # order_send returns None (not an error object) when margin is insufficient,
+        # so we validate upfront and fall back to auto-calculated size if needed.
+        margin_check = mt5.order_calc_margin(
+            mt5.ORDER_TYPE_BUY if signal == 'BUY' else mt5.ORDER_TYPE_SELL,
+            symbol, lot_size, 0  # price 0 = use current market price
+        )
+        if margin_check is not None and margin_check > free_margin * 0.9:
+            safe_lot = self.calculate_lot_size(balance)
+            logger.warning(
+                f"⚠️ Lot size {lot_size} requires ~${margin_check:.0f} margin but only "
+                f"${free_margin:.0f} free. Falling back to {safe_lot} lots."
+            )
+            lot_size = safe_lot
+
+        logger.info(f"💰 Account {account_id} balance: ${balance:.2f}, free margin: ${free_margin:.2f}, Lot size: {lot_size}")
 
         # Close opposite position synchronously (pass account_id to use correct position key)
         self._close_opposite_position_sync(symbol, account_id)
@@ -362,7 +379,12 @@ class AutoTrader:
         })
 
         if ticket is None or ticket.retcode != mt5.TRADE_RETCODE_DONE:
-            logger.error(f"❌ Trade failed for {symbol} on account {account_id}: {ticket.comment if ticket else 'None'}")
+            last_err = mt5.last_error()
+            logger.error(
+                f"❌ Trade failed for {symbol} on account {account_id}: "
+                f"{ticket.comment if ticket else 'order_send returned None'} | "
+                f"MT5 last error: {last_err}"
+            )
             return None
 
         logger.info(f"✅ TRADE PLACED! Ticket: {ticket.order}, {signal} {lot_size} {symbol} @ {entry_price} (account {account_id})")
