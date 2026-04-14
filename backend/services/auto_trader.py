@@ -193,10 +193,16 @@ class AutoTrader:
                 logger.warning(f"⚠️ Account {account_id} not found in manager")
                 continue
             try:
-                session.switch_to()  # ONE login call per account (cached if same)
+                session.switch_to()
             except Exception as e:
-                logger.warning(f"⚠️ Account {account_id} switch failed: {e}")
-                continue
+                logger.warning(f"⚠️ Account {account_id} switch failed: {e} — attempting reconnect")
+                try:
+                    session.connect(max_retries=1)
+                    session.switch_to()
+                    logger.info(f"✅ Account {account_id} reconnected successfully")
+                except Exception as e2:
+                    logger.error(f"❌ Account {account_id} reconnect failed: {e2} — skipping")
+                    continue
             if not session.connected:
                 continue
 
@@ -327,8 +333,8 @@ class AutoTrader:
         lot_size = manual_lot_size if (manual_lot_size and manual_lot_size > 0) else self.calculate_lot_size(balance)
         logger.info(f"💰 Account {account_id} balance: ${balance:.2f}, Lot size: {lot_size}")
 
-        # Close opposite position synchronously
-        self._close_opposite_position_sync(symbol)
+        # Close opposite position synchronously (pass account_id to use correct position key)
+        self._close_opposite_position_sync(symbol, account_id)
 
         sym_info = mt5.symbol_info(symbol)
         if sym_info is None:
@@ -359,14 +365,13 @@ class AutoTrader:
         }
         return {'entry_price': entry_price, 'lot_size': lot_size}
 
-    def _close_opposite_position_sync(self, symbol: str):
+    def _close_opposite_position_sync(self, symbol: str, account_id: int = None):
         """Close any open MT5 position for the symbol synchronously. MT5 must already be switched."""
         try:
-            # MT5 must already be switched to account_id by the caller (execute_trade does this)
-            # Check MT5 directly for open positions on this symbol
+            pos_key = f"{account_id}_{symbol}" if account_id else symbol
             positions = mt5.positions_get(symbol=symbol)
             if positions is None or len(positions) == 0:
-                self.open_positions.pop(symbol, None)
+                self.open_positions.pop(pos_key, None)
                 return
 
             for pos_info in positions:
@@ -392,7 +397,7 @@ class AutoTrader:
                 else:
                     logger.info(f"✅ Position closed! Ticket: {close_order.order}")
 
-            self.open_positions.pop(symbol, None)
+            self.open_positions.pop(pos_key, None)
 
         except Exception as e:
             logger.error(f"❌ Error closing position: {e}")
