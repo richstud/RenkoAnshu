@@ -36,7 +36,7 @@ export default function AccountManager() {
       const res = await fetch(`${API_URL}/api/accounts`);
       if (res.ok) {
         const data = await res.json();
-        const list = Array.isArray(data) ? data : (data.accounts || []);
+        const list = Array.isArray(data) ? data : (data.data || data.accounts || []);
         setAccounts(Array.isArray(list) ? list : []);
       } else {
         setAccounts([]);
