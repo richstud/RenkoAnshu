@@ -68,11 +68,15 @@ class AutoTrader:
             return 1.0
     
     async def load_watchlist(self):
-        """Load auto-trading watchlist from Supabase for ALL accounts with enabled symbols"""
+        """Load auto-trading watchlist from Supabase for ACTIVE accounts only"""
         try:
             if not self.supabase_client:
                 logger.warning("Supabase client not initialized")
                 return
+            
+            # Get active account logins so we skip disconnected accounts
+            active_accounts_res = self.supabase_client.table('accounts').select('login').eq('status', 'active').execute()
+            active_logins = {str(row['login']) for row in (active_accounts_res.data or [])}
             
             # Fetch all enabled symbols across all accounts
             response = self.supabase_client.table('watchlist').select('*').eq('algo_enabled', True).execute()
@@ -83,6 +87,10 @@ class AutoTrader:
             for item in response.data:
                 symbol = item['symbol']
                 account_id = item['account_id']
+                
+                # Skip symbols belonging to inactive/disconnected accounts
+                if str(account_id) not in active_logins:
+                    continue
                 
                 # Create key combining account and symbol for unique tracking
                 symbol_key = f"{account_id}_{symbol}"
