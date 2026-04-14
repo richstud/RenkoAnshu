@@ -416,6 +416,15 @@ async def get_mt5_positions(account_id: int = Query(...)):
     """Get real-time open positions directly from MT5 with live PnL"""
     try:
         import MetaTrader5 as mt5
+        from backend.mt5.connection import mt5_manager
+        
+        # Switch to the requested account before querying
+        session = mt5_manager.get_session(account_id)
+        if session:
+            try:
+                session.switch_to()
+            except Exception as e:
+                logger.warning(f"Could not switch to account {account_id}: {e}")
         
         positions = mt5.positions_get()
         if positions is None:
@@ -460,6 +469,15 @@ async def get_mt5_history(account_id: int = Query(...), days: int = Query(defaul
     try:
         import MetaTrader5 as mt5
         from datetime import datetime, timedelta
+        from backend.mt5.connection import mt5_manager
+        
+        # Switch to the requested account before querying history
+        session = mt5_manager.get_session(account_id)
+        if session:
+            try:
+                session.switch_to()
+            except Exception as e:
+                logger.warning(f"Could not switch to account {account_id}: {e}")
         
         date_to = datetime.now()
         date_from = date_to - timedelta(days=days)

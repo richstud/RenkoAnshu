@@ -170,16 +170,16 @@ class AutoTrader:
             symbol = config['symbol']  # Extract the actual symbol (e.g., 'BTCUSD')
             brick_size = config.get('brick_size', 1.0)
             
-            # Ensure account is connected
+            # Ensure account is connected AND switch MT5 active login to this account
             session = mt5_manager.get_session(account_id)
             if not session:
                 logger.warning(f"⚠️ Account {account_id} not found in manager")
                 return
             
             try:
-                session.ensure_connected()
+                session.switch_to()  # Always re-login to ensure MT5 is on this account
             except Exception as e:
-                logger.warning(f"⚠️ Account {account_id} connection issue: {e}. Will retry on next cycle.")
+                logger.warning(f"⚠️ Account {account_id} switch failed: {e}. Will retry on next cycle.")
                 return
             
             # Check if account is actually connected
@@ -273,22 +273,18 @@ class AutoTrader:
         try:
             logger.info(f"🎯 Executing {signal} for {symbol} on account {account_id}...")
             
-            # Ensure account is connected
+            # Ensure account is connected and switch MT5 to this account before trading
             session = mt5_manager.get_session(account_id)
             if not session:
                 logger.error(f"❌ Account {account_id} not found in manager")
                 return
             
-            # Check connection
-            if not session.connected:
-                logger.warning(f"⚠️ Account {account_id} not connected, attempting to connect...")
-                try:
-                    session.connect()
-                except Exception as e:
-                    logger.error(f"❌ Failed to connect account {account_id}: {e}")
-                    return
-            
-            session.ensure_connected()
+            # Always switch — MT5 only supports one active login at a time
+            try:
+                session.switch_to()
+            except Exception as e:
+                logger.error(f"❌ Failed to switch to account {account_id}: {e}")
+                return
             
             # Get account balance for lot sizing
             account_info = mt5.account_info()
@@ -359,6 +355,7 @@ class AutoTrader:
     async def close_opposite_position(self, symbol: str, account_id: int):
         """Close any open position for the symbol directly from MT5"""
         try:
+            # MT5 must already be switched to account_id by the caller (execute_trade does this)
             # Check MT5 directly for open positions on this symbol
             positions = mt5.positions_get(symbol=symbol)
             if positions is None or len(positions) == 0:

@@ -97,6 +97,20 @@ class AccountSession:
         if not self.connected:
             self.connect()
 
+    def switch_to(self):
+        """Switch MT5 active account to this account. Must call before any MT5 trading/query operation."""
+        try:
+            if not mt5.login(int(self.login), password=self.password, server=self.server, timeout=10000):
+                error_info = mt5.last_error()
+                logger.warning(f"MT5 switch to {self.login} failed: {error_info}. Retrying...")
+                time.sleep(1)
+                if not mt5.login(int(self.login), password=self.password, server=self.server, timeout=10000):
+                    raise RuntimeError(f"MT5 switch failed for {self.login}: {mt5.last_error()}")
+            self.connected = True
+        except Exception as e:
+            self.connected = False
+            raise
+
 
 class MT5Manager:
     def __init__(self):
