@@ -35,11 +35,11 @@ async def connect_account(request: ConnectAccountRequest):
         logger.info(f"🔐 Registering account {request.login} on {request.server}...")
 
         # Step 1: Save to Supabase immediately — this MUST succeed before we do anything else
+        # Note: password is NOT stored in DB (no password column) — kept in MT5 manager memory only
         balance = 0.0
         existing = supabase_client.table('accounts').select('*').eq('login', request.login).execute()
         if existing.data and len(existing.data) > 0:
             supabase_client.table('accounts').update({
-                'password': request.password,
                 'server': request.server,
                 'status': 'pending',
             }).eq('login', request.login).execute()
@@ -47,7 +47,6 @@ async def connect_account(request: ConnectAccountRequest):
         else:
             supabase_client.table('accounts').insert({
                 'login': request.login,
-                'password': request.password,
                 'server': request.server,
                 'status': 'pending',
                 'balance': 0,
