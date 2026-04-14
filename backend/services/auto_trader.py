@@ -163,9 +163,8 @@ class AutoTrader:
         """Evaluate strategy for all symbols - runs sync MT5 work in thread to avoid blocking event loop"""
         try:
             loop = asyncio.get_event_loop()
-            # All blocking MT5 calls run in a thread pool executor
             signals = await loop.run_in_executor(None, self._collect_signals_sync)
-            # Process signals (executes trades + async DB logging)
+            self._last_evaluation_time = datetime.now()  # Track last successful evaluation
             for sig in signals:
                 await self.execute_trade(sig['symbol'], sig['signal'], sig['account_id'], sig['config'])
         except Exception as e:
@@ -479,11 +478,18 @@ class AutoTrader:
     
     def get_status(self) -> dict:
         """Get auto-trader service status"""
+        # Infer running from last_evaluation being recent (within 60s)
+        # is_running can be stale if the loop is running as a background task
+        from datetime import datetime
+        is_active = self.is_running or (
+            hasattr(self, '_last_evaluation_time') and
+            (datetime.now() - self._last_evaluation_time).total_seconds() < 60
+        )
         return {
-            'running': self.is_running,
+            'running': is_active,
             'enabled_symbols': list(self.enabled_symbols.keys()),
             'open_positions': self.open_positions,
-            'last_evaluation': datetime.now().isoformat(),
+            'last_evaluation': self._last_evaluation_time.isoformat() if hasattr(self, '_last_evaluation_time') else datetime.now().isoformat(),
         }
 
 
