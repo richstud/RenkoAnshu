@@ -44,8 +44,12 @@ def calculate_renko_bricks(symbol: str, rates: list, brick_size: float, limit: i
         renko = renko_engines[engine_key]
         
         # Only feed last 50 rates to avoid expensive calculations
+        # MT5 copy_rates returns timestamps in broker server time (UTC+2/EET).
+        # Subtract 7200s to convert to UTC so the frontend IST conversion is correct.
+        MT5_SERVER_OFFSET = 7200  # XM broker server is UTC+2
         for rate in rates[-50:]:
-            renko.feed_tick(rate['close'], int(rate['time']))
+            utc_time = int(rate['time']) - MT5_SERVER_OFFSET
+            renko.feed_tick(rate['close'], utc_time)
         
         # Get brick history
         all_bricks = renko.history(min(limit, 100))
@@ -349,9 +353,11 @@ async def stream_renko_chart(websocket: WebSocket, symbol: str, brick_size: floa
                 if latest_time != last_candle_time:
                     last_candle_time = latest_time
                     
-                    # Feed all recent prices
+                    # Feed all recent prices (convert MT5 broker UTC+2 timestamps to UTC)
+                    MT5_SERVER_OFFSET = 7200
                     for rate in rates[-10:]:
-                        renko.feed_tick(rate['close'])
+                        utc_time = int(rate['time']) - MT5_SERVER_OFFSET
+                        renko.feed_tick(rate['close'], utc_time)
                     
                     # Get brick history (last 100)
                     all_bricks = renko.history(100)
@@ -386,7 +392,7 @@ async def stream_renko_chart(websocket: WebSocket, symbol: str, brick_size: floa
                         "current_price": float(rates[-1]['close']),
                         "current_direction": renko.direction(),
                         "signal": signal['type'].upper() if signal else None,
-                        "timestamp": datetime.fromtimestamp(rates[-1]['time']).isoformat(),
+                        "timestamp": datetime.utcfromtimestamp(int(rates[-1]['time']) - 7200).isoformat(),
                         "data_source": "MT5_LIVE_STREAM",
                     })
                     
