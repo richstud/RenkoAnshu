@@ -4,6 +4,7 @@ API endpoints for automated trading control
 from fastapi import APIRouter, HTTPException
 from backend.services.auto_trader import get_auto_trader
 import logging
+import asyncio
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/auto-trading", tags=["auto-trading"])
@@ -142,13 +143,8 @@ async def list_auto_trading_symbols():
 
 
 @router.post("/start")
-async def start_auto_trading():
-    """
-    Start the auto-trading service
-    
-    Returns:
-        Confirmation that service is running
-    """
+async def start_auto_trading_endpoint():
+    """Start the auto-trading service"""
     try:
         auto_trader = await get_auto_trader()
         
@@ -156,14 +152,16 @@ async def start_auto_trading():
             return {
                 "status": "already_running",
                 "message": "Auto-trading service is already running",
+                "enabled_symbols": list(auto_trader.enabled_symbols.keys()),
             }
         
-        # Note: In a real implementation, you'd start the background task here
-        # For now, the service starts automatically on initialization
+        # Actually start the background trading loop
+        asyncio.create_task(auto_trader.start())
+        logger.info("Auto-trading started via API")
         
         return {
-            "status": "running",
-            "message": "Auto-trading service is active",
+            "status": "started",
+            "message": "Auto-trading service started",
             "enabled_symbols": list(auto_trader.enabled_symbols.keys()),
         }
     
