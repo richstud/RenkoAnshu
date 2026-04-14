@@ -99,7 +99,7 @@ class AutoTrader:
                 # If brick_size changed, clear the old engine so it reinitializes
                 old_config = self.enabled_symbols.get(symbol_key)
                 if old_config and old_config.get('brick_size') != new_brick_size:
-                    old_key = f"{symbol}_{old_config['brick_size']}"
+                    old_key = f"{account_id}_{symbol}_{old_config['brick_size']}"
                     self.renko_engines.pop(old_key, None)
                     self.strategy_engines.pop(old_key, None)
                     self.last_candle_times.pop(old_key, None)
@@ -220,7 +220,10 @@ class AutoTrader:
             logger.debug(f"⏳ No rate data yet for {symbol}")
             return None
 
-        engine_key = f"{symbol}_{brick_size}"
+        # Include account_id so each account has its own independent Renko engine.
+        # Without this, accounts sharing the same symbol+brick_size share one engine,
+        # so only the first account to process each candle fires a signal.
+        engine_key = f"{account_id}_{symbol}_{brick_size}"
         if engine_key not in self.renko_engines:
             logger.info(f"🏗️ Creating Renko engine for {symbol} with brick_size={brick_size}")
             self.renko_engines[engine_key] = RenkoEngine(brick_size)
@@ -349,7 +352,8 @@ class AutoTrader:
             return None
 
         logger.info(f"✅ TRADE PLACED! Ticket: {ticket.order}, {signal} {lot_size} {symbol} @ {entry_price} (account {account_id})")
-        self.open_positions[symbol] = {
+        pos_key = f"{account_id}_{symbol}"  # per-account key prevents cross-account overwrite
+        self.open_positions[pos_key] = {
             'ticket': ticket.order, 'direction': signal, 'entry_price': entry_price,
             'lot_size': lot_size, 'opened_at': datetime.now().isoformat(), 'account_id': account_id,
         }
