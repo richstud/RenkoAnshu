@@ -34,28 +34,30 @@ async def connect_account(request: ConnectAccountRequest):
     try:
         logger.info(f"🔐 Registering account {request.login} on {request.server}...")
 
-        # Step 1: Save to Supabase immediately (don't wait for MT5)
+        # Step 1: Save to Supabase immediately — this MUST succeed before we do anything else
         balance = 0.0
-        try:
-            existing = supabase_client.table('accounts').select('*').eq('login', request.login).execute()
-            if existing.data and len(existing.data) > 0:
-                supabase_client.table('accounts').update({
-                    'password': request.password,
-                    'server': request.server,
-                    'status': 'pending',
-                }).eq('login', request.login).execute()
-                logger.info(f"✅ Account {request.login} updated in database (pending MT5 verify)")
-            else:
-                supabase_client.table('accounts').insert({
-                    'login': request.login,
-                    'password': request.password,
-                    'server': request.server,
-                    'status': 'pending',
-                    'balance': 0,
-                }).execute()
-                logger.info(f"✅ Account {request.login} saved to database (pending MT5 verify)")
-        except Exception as db_err:
-            logger.warning(f"Could not save to database: {db_err}")
+        existing = supabase_client.table('accounts').select('*').eq('login', request.login).execute()
+        if existing.data and len(existing.data) > 0:
+            supabase_client.table('accounts').update({
+                'password': request.password,
+                'server': request.server,
+                'status': 'pending',
+            }).eq('login', request.login).execute()
+            logger.info(f"✅ Account {request.login} updated in database (pending MT5 verify)")
+        else:
+            supabase_client.table('accounts').insert({
+                'login': request.login,
+                'password': request.password,
+                'server': request.server,
+                'status': 'pending',
+                'balance': 0,
+            }).execute()
+            logger.info(f"✅ Account {request.login} saved to database (pending MT5 verify)")
+        
+        # Confirm it was actually saved
+        verify_save = supabase_client.table('accounts').select('id').eq('login', request.login).execute()
+        if not verify_save.data:
+            raise HTTPException(status_code=500, detail="Failed to save account to database. Please try again.")
 
         # Step 2: Register in MT5 manager
         mt5_manager.add_account(request.login, request.password, request.server)
