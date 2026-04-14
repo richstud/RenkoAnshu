@@ -4,6 +4,7 @@ New endpoints for tickers, watchlist, and market data
 """
 
 import logging
+import time
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
@@ -15,6 +16,11 @@ from backend.supabase.client import supabase_client
 logger = logging.getLogger("endpoints")
 
 router = APIRouter(prefix="/api", tags=["Trading"])
+
+# Cache for tickers list — avoid calling MT5 on every request
+_tickers_cache: Optional[dict] = None
+_tickers_cache_time: float = 0
+_TICKERS_CACHE_TTL = 60  # seconds
 
 
 # ===================================
@@ -103,33 +109,44 @@ async def get_all_mt5_symbols(search: str = Query(default='', description="Searc
 
 @router.get("/tickers")
 async def get_tickers():
-    """Get all available tickers that exist in MT5"""
+    """Get all available tickers. Result cached 60s to avoid repeated MT5 blocking calls."""
+    global _tickers_cache, _tickers_cache_time
     try:
+        now = time.time()
+        if _tickers_cache is not None and (now - _tickers_cache_time) < _TICKERS_CACHE_TTL:
+            return _tickers_cache
+
         import MetaTrader5 as mt5
-        
+        import asyncio
+
         symbols = supabase_client.table('available_symbols').select('*').eq('is_active', True).execute()
-        
-        # Filter to only symbols available in MT5
-        available = []
-        for symbol_data in symbols.data:
-            symbol = symbol_data['symbol']
-            try:
-                # Check if symbol exists in MT5
-                symbol_info = mt5.symbol_info(symbol)
-                if symbol_info is not None:
-                    available.append(symbol_data)
-                    logger.info(f"✅ Symbol {symbol} available in MT5")
-                else:
-                    logger.warning(f"⚠️ Symbol {symbol} not found in MT5 - skipping from frontend list")
-            except Exception as e:
-                logger.warning(f"Error checking symbol {symbol}: {e}")
-        
-        return {
+
+        # Run MT5 availability check in thread to avoid blocking event loop
+        def check_availability():
+            available = []
+            for symbol_data in symbols.data:
+                symbol = symbol_data['symbol']
+                try:
+                    if mt5.symbol_info(symbol) is not None:
+                        available.append(symbol_data)
+                    else:
+                        logger.warning(f"⚠️ Symbol {symbol} not found in MT5 - skipping")
+                except Exception as e:
+                    logger.warning(f"Error checking symbol {symbol}: {e}")
+            return available
+
+        loop = asyncio.get_event_loop()
+        available = await loop.run_in_executor(None, check_availability)
+
+        result = {
             "count": len(available),
             "total": len(symbols.data),
             "unavailable": len(symbols.data) - len(available),
             "data": available
         }
+        _tickers_cache = result
+        _tickers_cache_time = now
+        return result
     except Exception as e:
         logger.error(f"Error getting tickers: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -146,6 +163,26 @@ async def get_ticker_quote(symbol: str):
     except Exception as e:
         logger.error(f"Error getting quote for {symbol}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/tickers/quotes/batch")
+async def get_all_quotes():
+    """Get quotes for all symbols in a single request (avoids N individual calls from frontend)"""
+    try:
+        all_quotes = price_manager.get_all_quotes() if hasattr(price_manager, 'get_all_quotes') else {}
+        if not all_quotes:
+            # Fallback: return quotes for all cached tickers
+            symbols_res = supabase_client.table('available_symbols').select('symbol').eq('is_active', True).execute()
+            all_quotes = {}
+            for row in symbols_res.data:
+                sym = row['symbol']
+                q = price_manager.get_quote(sym)
+                if q:
+                    all_quotes[sym] = q
+        return {"quotes": all_quotes, "count": len(all_quotes)}
+    except Exception as e:
+        logger.error(f"Error getting batch quotes: {e}")
+        return {"quotes": {}, "count": 0}
 
 
 @router.get("/market/quote/{symbol}")

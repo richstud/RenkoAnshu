@@ -152,208 +152,204 @@ class AutoTrader:
         self.is_running = False
     
     async def evaluate_strategy(self):
-        """Evaluate strategy for all enabled symbols on all accounts and execute trades"""
+        """Evaluate strategy for all symbols - runs sync MT5 work in thread to avoid blocking event loop"""
         try:
-            for symbol_key in list(self.enabled_symbols.keys()):
-                await self.evaluate_symbol(symbol_key)
+            loop = asyncio.get_event_loop()
+            # All blocking MT5 calls run in a thread pool executor
+            signals = await loop.run_in_executor(None, self._collect_signals_sync)
+            # Process signals (executes trades + async DB logging)
+            for sig in signals:
+                await self.execute_trade(sig['symbol'], sig['signal'], sig['account_id'], sig['config'])
         except Exception as e:
             logger.error(f"❌ Strategy evaluation error: {e}")
-    
-    async def evaluate_symbol(self, symbol_key: str):
-        """Evaluate strategy for a specific account+symbol pair"""
-        try:
-            config = self.enabled_symbols.get(symbol_key)
-            if not config or not config.get('algo_enabled', False):
-                return
-            
+
+    def _collect_signals_sync(self) -> list:
+        """Synchronous signal collection - runs in thread pool.
+        Groups symbols by account to minimize mt5.login() calls (one per account switch).
+        Returns list of {symbol, signal, account_id, config} dicts.
+        """
+        signals = []
+
+        # Group by account_id to call switch_to() once per account
+        by_account: Dict[int, list] = {}
+        for symbol_key, config in list(self.enabled_symbols.items()):
+            if not config.get('algo_enabled', False):
+                continue
             account_id = config['account_id']
-            symbol = config['symbol']  # Extract the actual symbol (e.g., 'BTCUSD')
-            brick_size = config.get('brick_size', 1.0)
-            
-            # Ensure account is connected AND switch MT5 active login to this account
+            if account_id not in by_account:
+                by_account[account_id] = []
+            by_account[account_id].append((symbol_key, config))
+
+        for account_id, items in by_account.items():
             session = mt5_manager.get_session(account_id)
             if not session:
                 logger.warning(f"⚠️ Account {account_id} not found in manager")
-                return
-            
+                continue
             try:
-                session.switch_to()  # Always re-login to ensure MT5 is on this account
+                session.switch_to()  # ONE login call per account (cached if same)
             except Exception as e:
-                logger.warning(f"⚠️ Account {account_id} switch failed: {e}. Will retry on next cycle.")
-                return
-            
-            # Check if account is actually connected
+                logger.warning(f"⚠️ Account {account_id} switch failed: {e}")
+                continue
             if not session.connected:
-                logger.debug(f"⏳ Account {account_id} not yet connected, skipping evaluation")
-                return
-            
-            # Fetch latest 1-min candles using ACTUAL SYMBOL, not the key
-            rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M1, 0, 100)
-            if rates is None or len(rates) == 0:
-                logger.debug(f"⏳ No rate data yet for {symbol}")
-                return
-            
-            logger.debug(f"📈 Got {len(rates)} rates for {symbol}")
-            
-            # Get or create Renko engine
-            engine_key = f"{symbol}_{brick_size}"
-            if engine_key not in self.renko_engines:
-                logger.info(f"🏗️ Creating Renko engine for {symbol} with brick_size={brick_size}")
-                self.renko_engines[engine_key] = RenkoEngine(brick_size)
-                self.strategy_engines[engine_key] = StrategyEngine(self.renko_engines[engine_key])
-            
-            renko = self.renko_engines[engine_key]
-            
-            # ─── CRITICAL FIX: only feed candles we haven't seen yet ───────────
-            # Always sort ascending (oldest→newest) regardless of MT5 return order
-            rates_sorted = sorted(rates, key=lambda r: int(r['time']))
+                continue
 
-            last_fed_time = self.last_candle_times.get(engine_key, 0)
-            if last_fed_time == 0:
-                # First run: initialize engine with full history
-                new_rates = rates_sorted
-                logger.info(f"📊 Initializing Renko engine for {symbol} with {len(new_rates)} historical candles")
-            else:
-                # Subsequent runs: only NEW candles (strictly after last fed time)
-                new_rates = [r for r in rates_sorted if int(r['time']) > last_fed_time]
+            for symbol_key, config in items:
+                try:
+                    sig = self._check_signal_sync(symbol_key, config, account_id)
+                    if sig:
+                        signals.append(sig)
+                except Exception as e:
+                    logger.error(f"❌ Error checking signal for {symbol_key}: {e}")
 
-            if new_rates:
-                for rate in new_rates:
-                    renko.feed_tick(rate['close'])
-                # Use max() to guarantee we always store the most recent time
-                self.last_candle_times[engine_key] = max(int(r['time']) for r in new_rates)
-                logger.debug(f"Fed {len(new_rates)} new candle(s) to {symbol} Renko engine (last_time={self.last_candle_times[engine_key]})")
-            # ──────────────────────────────────────────────────────────────────
-            
-            # Get current brick color
-            all_bricks = renko.history(10)
-            if len(all_bricks) == 0:
-                logger.info(f"⏳ [{symbol}] No bricks generated yet (need more price movement with brick_size={brick_size})")
-                return
-            
-            current_brick = all_bricks[-1]
-            current_color = current_brick.color  # 'green' or 'red'
-            last_color = self.last_brick_state.get(symbol_key)
-            
-            # On first run: seed last_color from second-to-last brick so we can
-            # detect a reversal that already happened before startup
-            if last_color is None:
-                if len(all_bricks) >= 2:
-                    last_color = all_bricks[-2].color
-                    logger.info(f"📊 [{symbol}] Renko initialized: prev={last_color}, current={current_color}, brick_size={brick_size}")
-                else:
-                    # Only 1 brick — nothing to compare yet
-                    self.last_brick_state[symbol_key] = current_color
-                    return
-            
-            # Store current color using the symbol_key to track per account
-            self.last_brick_state[symbol_key] = current_color
-            
-            # Check if color changed (new signal)
-            if last_color == current_color:
-                return
-            
-            # Signal detected!
-            logger.info(f"📊 Signal detected for {symbol}: {last_color} → {current_color}, brick_size={brick_size}")
-            
-            # Determine signal
-            if current_color == 'green':
-                signal = 'BUY'
+        return signals
+
+    def _check_signal_sync(self, symbol_key: str, config: dict, account_id: int) -> Optional[dict]:
+        """Pure sync: check Renko signal for one symbol. MT5 must already be switched to account."""
+        symbol = config['symbol']
+        brick_size = config.get('brick_size', 1.0)
+
+        rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M1, 0, 100)
+        if rates is None or len(rates) == 0:
+            logger.debug(f"⏳ No rate data yet for {symbol}")
+            return None
+
+        engine_key = f"{symbol}_{brick_size}"
+        if engine_key not in self.renko_engines:
+            logger.info(f"🏗️ Creating Renko engine for {symbol} with brick_size={brick_size}")
+            self.renko_engines[engine_key] = RenkoEngine(brick_size)
+            self.strategy_engines[engine_key] = StrategyEngine(self.renko_engines[engine_key])
+
+        renko = self.renko_engines[engine_key]
+
+        rates_sorted = sorted(rates, key=lambda r: int(r['time']))
+        last_fed_time = self.last_candle_times.get(engine_key, 0)
+        if last_fed_time == 0:
+            new_rates = rates_sorted
+            logger.info(f"📊 Initializing Renko engine for {symbol} with {len(new_rates)} historical candles")
+        else:
+            new_rates = [r for r in rates_sorted if int(r['time']) > last_fed_time]
+
+        if new_rates:
+            for rate in new_rates:
+                renko.feed_tick(rate['close'])
+            self.last_candle_times[engine_key] = max(int(r['time']) for r in new_rates)
+            logger.debug(f"Fed {len(new_rates)} new candle(s) to {symbol}")
+
+        all_bricks = renko.history(10)
+        if len(all_bricks) == 0:
+            logger.info(f"⏳ [{symbol}] No bricks generated yet (need more price movement with brick_size={brick_size})")
+            return None
+
+        current_color = all_bricks[-1].color
+        last_color = self.last_brick_state.get(symbol_key)
+
+        if last_color is None:
+            if len(all_bricks) >= 2:
+                last_color = all_bricks[-2].color
+                logger.info(f"📊 [{symbol}] Initialized: prev={last_color}, current={current_color}")
             else:
-                signal = 'SELL'
-            
-            # Execute trade
-            await self.execute_trade(symbol, signal, account_id, config)
-        
+                self.last_brick_state[symbol_key] = current_color
+                return None
+
+        self.last_brick_state[symbol_key] = current_color
+
+        if last_color == current_color:
+            return None
+
+        signal = 'BUY' if current_color == 'green' else 'SELL'
+        logger.info(f"📊 Signal: {symbol} on account {account_id}: {last_color} → {current_color} → {signal}")
+        return {'symbol': symbol, 'signal': signal, 'account_id': account_id, 'config': config}
+
+    async def evaluate_symbol(self, symbol_key: str):
+        """Legacy single-symbol evaluator - kept for compatibility. Prefer _collect_signals_sync."""
+        config = self.enabled_symbols.get(symbol_key)
+        if not config or not config.get('algo_enabled', False):
+            return
+        account_id = config['account_id']
+        session = mt5_manager.get_session(account_id)
+        if not session:
+            return
+        try:
+            session.switch_to()
         except Exception as e:
-            logger.error(f"❌ Error evaluating {symbol}: {e}")
+            logger.warning(f"⚠️ {account_id} switch failed: {e}")
+            return
+        sig = self._check_signal_sync(symbol_key, config, account_id)
+        if sig:
+            await self.execute_trade(sig['symbol'], sig['signal'], sig['account_id'], sig['config'])
     
     async def execute_trade(self, symbol: str, signal: str, account_id: int, config: dict):
-        """Execute a trade based on signal"""
+        """Execute a trade based on signal - runs sync MT5 work in thread executor"""
         try:
             logger.info(f"🎯 Executing {signal} for {symbol} on account {account_id}...")
-            
-            # Ensure account is connected and switch MT5 to this account before trading
-            session = mt5_manager.get_session(account_id)
-            if not session:
-                logger.error(f"❌ Account {account_id} not found in manager")
-                return
-            
-            # Always switch — MT5 only supports one active login at a time
-            try:
-                session.switch_to()
-            except Exception as e:
-                logger.error(f"❌ Failed to switch to account {account_id}: {e}")
-                return
-            
-            # Get account balance for lot sizing
-            account_info = mt5.account_info()
-            if account_info is None:
-                logger.error("❌ Failed to get account info")
-                return
-            
-            balance = account_info.balance
-            # Check if manual lot size is set in watchlist config (priority over calculated)
-            manual_lot_size = config.get('lot_size')
-            if manual_lot_size and manual_lot_size > 0:
-                lot_size = manual_lot_size
-                logger.info(f"💰 Account {account_id} balance: ${balance:.2f}, Using manual lot size: {lot_size}")
-            else:
-                # Calculate lot size based on account balance (dynamic sizing) - fallback
-                lot_size = self.calculate_lot_size(balance)
-                logger.info(f"💰 Account {account_id} balance: ${balance:.2f}, Calculated lot size: {lot_size}")
-            
-            # Close opposite position if exists
-            await self.close_opposite_position(symbol, account_id)
-            
-            # Place new trade
-            entry_price = float(mt5.symbol_info(symbol).ask if signal == 'BUY' else mt5.symbol_info(symbol).bid)
-            
-            if signal == 'BUY':
-                ticket = mt5.order_send({
-                    'action': mt5.TRADE_ACTION_DEAL,
-                    'symbol': symbol,
-                    'volume': lot_size,
-                    'type': mt5.ORDER_TYPE_BUY,
-                    'price': entry_price,
-                    'type_filling': mt5.ORDER_FILLING_IOC,
-                    'comment': f'Auto-Trade BUY - Renko {config.get("brick_size", 0.005)}'
-                })
-            else:  # SELL
-                ticket = mt5.order_send({
-                    'action': mt5.TRADE_ACTION_DEAL,
-                    'symbol': symbol,
-                    'volume': lot_size,
-                    'type': mt5.ORDER_TYPE_SELL,
-                    'price': entry_price,
-                    'type_filling': mt5.ORDER_FILLING_IOC,
-                    'comment': f'Auto-Trade SELL - Renko {config.get("brick_size", 0.005)}'
-                })
-            
-            if ticket is None or ticket.retcode != mt5.TRADE_RETCODE_DONE:
-                logger.error(f"❌ Trade failed for {symbol} on account {account_id}: {ticket.comment if ticket else 'Unknown error'}")
-                return
-            
-            logger.info(f"✅ TRADE PLACED! Ticket: {ticket.order}, {signal} {lot_size} {symbol} @ {entry_price} on account {account_id}")
-            
-            # Store position
-            self.open_positions[symbol] = {
-                'ticket': ticket.order,
-                'direction': signal,
-                'entry_price': entry_price,
-                'lot_size': lot_size,
-                'opened_at': datetime.now().isoformat(),
-                'account_id': account_id,
-            }
-            
-            # Log to database
-            await self.log_trade(symbol, signal, entry_price, lot_size, account_id)
-        
+
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                None, lambda: self._execute_trade_sync(symbol, signal, account_id, config)
+            )
+
+            if result:
+                # Async logging after sync MT5 work completes
+                await self.log_trade(symbol, signal, result['entry_price'], result['lot_size'], account_id)
+
         except Exception as e:
             logger.error(f"❌ Trade execution error: {e}")
-    
-    async def close_opposite_position(self, symbol: str, account_id: int):
-        """Close any open position for the symbol directly from MT5"""
+
+    def _execute_trade_sync(self, symbol: str, signal: str, account_id: int, config: dict) -> Optional[dict]:
+        """Synchronous MT5 trade execution - runs in thread pool."""
+        session = mt5_manager.get_session(account_id)
+        if not session:
+            logger.error(f"❌ Account {account_id} not found in manager")
+            return None
+        try:
+            session.switch_to()  # Cached: fast if already on this account
+        except Exception as e:
+            logger.error(f"❌ Failed to switch to account {account_id}: {e}")
+            return None
+
+        account_info = mt5.account_info()
+        if account_info is None:
+            logger.error("❌ Failed to get account info")
+            return None
+
+        balance = account_info.balance
+        manual_lot_size = config.get('lot_size')
+        lot_size = manual_lot_size if (manual_lot_size and manual_lot_size > 0) else self.calculate_lot_size(balance)
+        logger.info(f"💰 Account {account_id} balance: ${balance:.2f}, Lot size: {lot_size}")
+
+        # Close opposite position synchronously
+        self._close_opposite_position_sync(symbol)
+
+        sym_info = mt5.symbol_info(symbol)
+        if sym_info is None:
+            logger.error(f"❌ Symbol info not available for {symbol}")
+            return None
+        entry_price = float(sym_info.ask if signal == 'BUY' else sym_info.bid)
+        order_type = mt5.ORDER_TYPE_BUY if signal == 'BUY' else mt5.ORDER_TYPE_SELL
+
+        ticket = mt5.order_send({
+            'action': mt5.TRADE_ACTION_DEAL,
+            'symbol': symbol,
+            'volume': lot_size,
+            'type': order_type,
+            'price': entry_price,
+            'type_filling': mt5.ORDER_FILLING_IOC,
+            'comment': f'Auto-Trade {signal} - Renko {config.get("brick_size", 1.0)}'
+        })
+
+        if ticket is None or ticket.retcode != mt5.TRADE_RETCODE_DONE:
+            logger.error(f"❌ Trade failed for {symbol} on account {account_id}: {ticket.comment if ticket else 'None'}")
+            return None
+
+        logger.info(f"✅ TRADE PLACED! Ticket: {ticket.order}, {signal} {lot_size} {symbol} @ {entry_price} (account {account_id})")
+        self.open_positions[symbol] = {
+            'ticket': ticket.order, 'direction': signal, 'entry_price': entry_price,
+            'lot_size': lot_size, 'opened_at': datetime.now().isoformat(), 'account_id': account_id,
+        }
+        return {'entry_price': entry_price, 'lot_size': lot_size}
+
+    def _close_opposite_position_sync(self, symbol: str):
+        """Close any open MT5 position for the symbol synchronously. MT5 must already be switched."""
         try:
             # MT5 must already be switched to account_id by the caller (execute_trade does this)
             # Check MT5 directly for open positions on this symbol

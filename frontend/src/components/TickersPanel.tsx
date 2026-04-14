@@ -30,20 +30,11 @@ export default function TickersPanel({ onAddToWatchlist, watchlistSymbols }: Tic
       const res = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/tickers/${symbol}/quote`);
       if (res.ok) {
         const quote = await res.json();
-        setQuotes(prev => ({
-          ...prev,
-          [symbol]: quote
-        }));
+        setQuotes(prev => ({ ...prev, [symbol]: quote }));
       }
     } catch (error) {
       console.error(`Failed to fetch quote for ${symbol}:`, error);
     }
-  };
-
-  const fetchQuotes = () => {
-    tickers.forEach(ticker => {
-      fetchQuote(ticker.symbol);
-    });
   };
 
   useEffect(() => {
@@ -51,7 +42,10 @@ export default function TickersPanel({ onAddToWatchlist, watchlistSymbols }: Tic
   }, []);
 
   useEffect(() => {
-    const interval = setInterval(fetchQuotes, 2000);
+    if (tickers.length === 0) return;
+    // Single batch request instead of 18 individual requests every 2s
+    const interval = setInterval(fetchAllQuotes, 3000);
+    fetchAllQuotes(); // Immediate first fetch
     return () => clearInterval(interval);
   }, [tickers]);
 
@@ -60,18 +54,33 @@ export default function TickersPanel({ onAddToWatchlist, watchlistSymbols }: Tic
       const res = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/tickers`);
       if (res.ok) {
         const data = await res.json();
-        setTickers(data.data);
-        // Fetch initial quotes
-        data.data.forEach((ticker: Ticker) => {
-          fetchQuote(ticker.symbol);
-        });
+        const list = data.data || data || [];
+        setTickers(Array.isArray(list) ? list : []);
+        // Fetch quotes immediately after tickers load
+        fetchAllQuotes();
       }
     } catch (error) {
       console.error('Failed to fetch tickers:', error);
     }
   };
 
-
+  const fetchAllQuotes = async () => {
+    try {
+      // Batch endpoint — one request for all quotes
+      const res = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/tickers/quotes/batch`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.quotes) {
+          setQuotes(data.quotes);
+          return;
+        }
+      }
+    } catch {
+      // Fall back to individual calls if batch fails
+    }
+    // Fallback: fetch individual quotes in parallel
+    tickers.forEach(ticker => fetchQuote(ticker.symbol));
+  };
 
   const getSpread = (symbol: string) => {
     const quote = quotes[symbol];

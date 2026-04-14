@@ -8,6 +8,9 @@ from backend.config import settings
 
 logger = logging.getLogger("mt5")
 
+# Track which account MT5 is currently active on to avoid redundant login calls
+_active_login: Optional[int] = None
+
 class AccountSession:
     def __init__(self, login: int, password: str, server: str):
         self.login = login
@@ -98,16 +101,28 @@ class AccountSession:
             self.connect()
 
     def switch_to(self):
-        """Switch MT5 active account to this account. Must call before any MT5 trading/query operation."""
+        """Switch MT5 active account to this account. Must call before any MT5 trading/query operation.
+        
+        Skips the mt5.login() call if MT5 is already active on this account, to avoid
+        blocking the event loop with redundant authentication round-trips.
+        """
+        global _active_login
         try:
-            if not mt5.login(int(self.login), password=self.password, server=self.server, timeout=10000):
+            # Skip login if already on this account — avoids 1-10s blocking call
+            if _active_login == self.login and self.connected:
+                return
+
+            if not mt5.login(int(self.login), password=self.password, server=self.server, timeout=5000):
                 error_info = mt5.last_error()
+                _active_login = None
                 logger.warning(f"MT5 switch to {self.login} failed: {error_info}. Retrying...")
-                time.sleep(1)
-                if not mt5.login(int(self.login), password=self.password, server=self.server, timeout=10000):
+                time.sleep(0.5)
+                if not mt5.login(int(self.login), password=self.password, server=self.server, timeout=5000):
                     raise RuntimeError(f"MT5 switch failed for {self.login}: {mt5.last_error()}")
+            _active_login = self.login
             self.connected = True
         except Exception as e:
+            _active_login = None
             self.connected = False
             raise
 
