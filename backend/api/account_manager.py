@@ -122,29 +122,23 @@ async def connect_account(request: ConnectAccountRequest):
 
 @router.post("/disconnect-account")
 async def disconnect_account(request: DisconnectAccountRequest):
-    """Disconnect/Unlink an MT5 account"""
+    """Disconnect/Unlink an MT5 account — removes from DB entirely"""
     try:
         login = request.login
         logger.info(f"🔓 Disconnecting account {login}...")
 
-        # Remove from MT5 manager
+        # Remove from MT5 manager (in-memory, immediate)
         mt5_manager.remove_account(login)
 
-        # Update Supabase
-        try:
-            supabase_client.table('accounts').update({
-                'status': 'inactive'
-            }).eq('login', login).execute()
-            logger.info(f"✅ Account {login} marked as inactive")
-        except Exception as db_err:
-            logger.warning(f"Could not update database: {db_err}")
+        # DELETE from Supabase completely — so it won't reload on restart
+        supabase_client.table('accounts').delete().eq('login', login).execute()
+        logger.info(f"✅ Account {login} deleted from database")
 
-        # Notify auto-trader to stop monitoring this account
+        # Notify auto-trader to stop monitoring this account immediately
         try:
             from backend.services.auto_trader import get_auto_trader_instance
             instance = get_auto_trader_instance()
             if instance and instance.is_running:
-                # Remove all symbol_keys for this account
                 keys_to_remove = [k for k in instance.enabled_symbols if k.startswith(f"{login}_")]
                 for k in keys_to_remove:
                     instance.enabled_symbols.pop(k, None)
@@ -154,7 +148,7 @@ async def disconnect_account(request: DisconnectAccountRequest):
 
         return {
             "status": "success",
-            "message": f"Account {login} disconnected",
+            "message": f"Account {login} disconnected and removed",
             "login": login
         }
 
