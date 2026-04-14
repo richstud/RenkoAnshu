@@ -54,40 +54,35 @@ async def run_worker():
 async def startup_event():
     """Initialize MT5 connection and load accounts on startup"""
     try:
-        # Try to initialize default account from settings
-        if settings.MT5_LOGIN and settings.MT5_PASSWORD and settings.MT5_SERVER:
-            mt5_manager.add_account(
-                settings.MT5_LOGIN,
-                settings.MT5_PASSWORD,
-                settings.MT5_SERVER
-            )
-            logger.info(f"Added default account {settings.MT5_LOGIN} from environment")
-        
-        # Load accounts from Supabase and connect
+        # Load accounts from Supabase DB into mt5_manager.sessions
         try:
             response = supabase_client.table("accounts").select("*").execute()
             if response.data:
                 for account in response.data:
                     if account["login"] not in mt5_manager.sessions:
-                        # Add account from database to sessions
                         password = account.get("password", settings.MT5_PASSWORD)
                         server = account.get("server", settings.MT5_SERVER)
-                        mt5_manager.add_account(
-                            account["login"],
-                            password,
-                            server
-                        )
+                        mt5_manager.add_account(account["login"], password, server)
                         logger.info(f"Loaded account {account['login']} from database")
                 logger.info(f"Loaded {len(response.data)} accounts from database")
         except Exception as e:
             logger.warning(f"Could not load accounts from Supabase: {e}")
-        
-        # Try to connect at least one account
+
+        # Try to add the default env-var account too
+        if settings.MT5_LOGIN and settings.MT5_PASSWORD and settings.MT5_SERVER:
+            if settings.MT5_LOGIN not in mt5_manager.sessions:
+                mt5_manager.add_account(settings.MT5_LOGIN, settings.MT5_PASSWORD, settings.MT5_SERVER)
+                logger.info(f"Added default account {settings.MT5_LOGIN} from environment")
+
+        # Connect MT5 accounts in a background thread so the HTTP server starts immediately
         if mt5_manager.sessions:
-            logger.info(f"Attempting to connect {len(mt5_manager.sessions)} account(s)")
-            mt5_manager.connect_all()
+            logger.info(f"Starting MT5 connection for {len(mt5_manager.sessions)} account(s) in background...")
+            loop = asyncio.get_event_loop()
+            asyncio.create_task(
+                loop.run_in_executor(None, lambda: mt5_manager.connect_all(max_retries=3))
+            )
         
-        # Start auto-trading service
+        # Start auto-trading service (after a short delay to let MT5 connect first)
         logger.info("Starting auto-trading service...")
         await start_auto_trading()
         

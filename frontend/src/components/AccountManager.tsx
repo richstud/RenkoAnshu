@@ -85,10 +85,14 @@ export default function AccountManager() {
 
       if (res.ok) {
         const data = await res.json();
-        setSuccess(`✅ Account ${formData.login} connected! Balance: $${data.balance?.toFixed(2) ?? '?'}`);
+        if (data.verified === false) {
+          setSuccess(`⏳ Account ${formData.login} saved! MT5 is busy — it will connect automatically on next VPS restart.`);
+        } else {
+          setSuccess(`✅ Account ${formData.login} connected! Balance: $${data.balance?.toFixed(2) ?? '?'}`);
+        }
         setFormData({ login: '', password: '', server: formData.server });
         fetchAccounts();
-        setTimeout(() => setSuccess(null), 5000);
+        setTimeout(() => setSuccess(null), 8000);
       } else {
         const errData = await res.json().catch(() => ({ detail: res.statusText }));
         setError(`❌ ${errData.detail || 'Connection failed'}`);

@@ -26,79 +26,96 @@ class DisconnectAccountRequest(BaseModel):
 
 @router.post("/connect-account")
 async def connect_account(request: ConnectAccountRequest):
-    """Connect/Link a new MT5 account"""
+    """Connect/Link a new MT5 account.
+    
+    Saves credentials to DB immediately so account is registered even if MT5 is busy.
+    Then tries to verify via MT5 with a short timeout.
+    """
     try:
-        logger.info(f"🔐 Attempting to connect account {request.login} on {request.server}...")
+        logger.info(f"🔐 Registering account {request.login} on {request.server}...")
 
-        # Add account to MT5 manager
-        mt5_manager.add_account(request.login, request.password, request.server)
-
-        # Try to connect with a hard timeout so the HTTP request doesn't hang
-        try:
-            connected = await asyncio.wait_for(
-                asyncio.get_event_loop().run_in_executor(
-                    None, lambda: mt5_manager.connect_account(request.login, max_retries=2)
-                ),
-                timeout=20.0
-            )
-        except asyncio.TimeoutError:
-            raise HTTPException(status_code=408, detail="MT5 connection timed out. Ensure MT5 terminal is running and credentials are correct.")
-
-        if not connected:
-            raise HTTPException(status_code=400, detail="Failed to connect to MT5. Check login, password and server name.")
-
-        # Get account info
-        account_info = mt5_manager.get_account_info(request.login)
-        if account_info is None:
-            raise HTTPException(status_code=400, detail="Connected but could not retrieve account info")
-
-        balance = float(account_info.balance)
-
-        # Save to Supabase
+        # Step 1: Save to Supabase immediately (don't wait for MT5)
+        balance = 0.0
         try:
             existing = supabase_client.table('accounts').select('*').eq('login', request.login).execute()
             if existing.data and len(existing.data) > 0:
                 supabase_client.table('accounts').update({
                     'password': request.password,
                     'server': request.server,
-                    'status': 'active',
-                    'balance': balance
+                    'status': 'pending',
                 }).eq('login', request.login).execute()
-                logger.info(f"✅ Account {request.login} updated in database")
+                logger.info(f"✅ Account {request.login} updated in database (pending MT5 verify)")
             else:
                 supabase_client.table('accounts').insert({
                     'login': request.login,
                     'password': request.password,
                     'server': request.server,
-                    'status': 'active',
-                    'balance': balance
+                    'status': 'pending',
+                    'balance': 0,
                 }).execute()
-                logger.info(f"✅ Account {request.login} added to database")
+                logger.info(f"✅ Account {request.login} saved to database (pending MT5 verify)")
         except Exception as db_err:
             logger.warning(f"Could not save to database: {db_err}")
 
-        # Notify auto-trader to reload watchlist so new account starts trading
+        # Step 2: Register in MT5 manager
+        mt5_manager.add_account(request.login, request.password, request.server)
+
+        # Step 3: Try MT5 verify with 10s timeout (shorter — MT5 may be busy)
+        mt5_verified = False
+        try:
+            connected = await asyncio.wait_for(
+                asyncio.get_event_loop().run_in_executor(
+                    None, lambda: mt5_manager.connect_account(request.login, max_retries=1)
+                ),
+                timeout=10.0
+            )
+            if connected:
+                account_info = mt5_manager.get_account_info(request.login)
+                if account_info:
+                    balance = float(account_info.balance)
+                    mt5_verified = True
+                    # Update DB with live balance and active status
+                    supabase_client.table('accounts').update({
+                        'status': 'active',
+                        'balance': balance
+                    }).eq('login', request.login).execute()
+        except asyncio.TimeoutError:
+            logger.warning(f"MT5 verify timed out for {request.login} — saved to DB, will connect on restart")
+        except Exception as mt5_err:
+            logger.warning(f"MT5 verify failed for {request.login}: {mt5_err} — saved to DB")
+
+        # Notify auto-trader to reload watchlist
         try:
             from backend.services.auto_trader import get_auto_trader_instance
             instance = get_auto_trader_instance()
             if instance and instance.is_running:
                 asyncio.create_task(instance.load_watchlist())
-                logger.info(f"Auto-trader notified to reload watchlist for new account {request.login}")
         except Exception as e:
             logger.warning(f"Could not notify auto-trader: {e}")
 
-        return {
-            "status": "success",
-            "message": f"Account {request.login} connected successfully",
-            "login": request.login,
-            "server": request.server,
-            "balance": balance
-        }
+        if mt5_verified:
+            return {
+                "status": "success",
+                "message": f"Account {request.login} connected and verified",
+                "login": request.login,
+                "server": request.server,
+                "balance": balance,
+                "verified": True
+            }
+        else:
+            return {
+                "status": "pending",
+                "message": f"Account {request.login} saved. MT5 is busy — it will connect automatically on next restart.",
+                "login": request.login,
+                "server": request.server,
+                "balance": 0,
+                "verified": False
+            }
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"❌ Failed to connect account {request.login}: {e}")
+        logger.error(f"❌ Failed to register account {request.login}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

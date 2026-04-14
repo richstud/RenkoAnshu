@@ -24,25 +24,37 @@ export default function WatchlistManager({ accountId, onUpdate, refreshTrigger }
   const [watchlist, setWatchlist] = useState<WatchlistItem[]>([]);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editData, setEditData] = useState<Partial<WatchlistItem>>({});
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    setLoading(true);
     fetchWatchlist();
-    // Auto-refresh every 3 seconds
-    const interval = setInterval(fetchWatchlist, 3000);
+    const interval = setInterval(fetchWatchlist, 5000);
     return () => clearInterval(interval);
   }, [accountId, refreshTrigger]);
 
   const fetchWatchlist = async () => {
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000);
       const res = await fetch(
-        `${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/watchlist?account_id=${accountId}`
+        `${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/watchlist?account_id=${accountId}`,
+        { signal: controller.signal }
       );
+      clearTimeout(timeoutId);
       if (res.ok) {
         const data = await res.json();
-        setWatchlist(data.data || data.symbols || []);
+        const list = data.data || data.symbols || [];
+        setWatchlist(list);
       }
-    } catch (error) {
-      console.error('Failed to fetch watchlist:', error);
+      // If not ok, keep existing data (don't reset to empty)
+    } catch (error: any) {
+      if (error.name !== 'AbortError') {
+        console.error('Failed to fetch watchlist:', error);
+      }
+      // On error/timeout, keep existing data displayed
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -122,6 +134,14 @@ export default function WatchlistManager({ accountId, onUpdate, refreshTrigger }
       console.error('Failed to toggle algo:', error);
     }
   };
+
+  if (loading && watchlist.length === 0) {
+    return (
+      <div className="bg-slate-800 p-4 rounded-lg text-slate-400 flex items-center gap-2">
+        <span className="animate-spin">⏳</span> Loading watchlist...
+      </div>
+    );
+  }
 
   if (watchlist.length === 0) {
     return (
