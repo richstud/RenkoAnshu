@@ -74,15 +74,16 @@ async def startup_event():
                 mt5_manager.add_account(settings.MT5_LOGIN, settings.MT5_PASSWORD, settings.MT5_SERVER)
                 logger.info(f"Added default account {settings.MT5_LOGIN} from environment")
 
-        # Connect MT5 accounts in a background thread so the HTTP server starts immediately
+        # Connect MT5 accounts in a background thread so the HTTP server starts immediately.
+        # run_in_executor returns a Future, not a coroutine — use ensure_future, not create_task.
         if mt5_manager.sessions:
             logger.info(f"Starting MT5 connection for {len(mt5_manager.sessions)} account(s) in background...")
             loop = asyncio.get_event_loop()
-            asyncio.create_task(
+            asyncio.ensure_future(
                 loop.run_in_executor(None, lambda: mt5_manager.connect_all(max_retries=3))
             )
         
-        # Start auto-trading service (after a short delay to let MT5 connect first)
+        # Start auto-trading service in background (auto_trader.start() waits 8s for MT5 to connect)
         logger.info("Starting auto-trading service...")
         await start_auto_trading()
         
