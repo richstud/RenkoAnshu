@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
 import { getAccounts, getTrades, startBot, stopBot, updateSettings } from './services/api';
+import { supabase } from './services/supabase';
+import AuthPage from './components/AuthPage';
 import AccountsPanel from './components/AccountsPanel';
 import AccountManager from './components/AccountManager';
 import TradeDashboard from './components/TradeDashboard';
@@ -12,11 +14,13 @@ import LivePositions from './components/LivePositions';
 import TradeExecutor from './components/TradeExecutor';
 import RenkoChart from './components/RenkoChart';
 import { useWebSocket } from './hooks/useWebSocket';
+import type { Session } from '@supabase/supabase-js';
 
 export type Trade = { id: number; account_id: number; symbol: string; type: string; lot: number; entry_price: number; exit_price?: number; profit?: number; timestamp: string };
 export type Account = { id: number; login: number; server: string; status: string };
 
 function App() {
+  const [session, setSession] = useState<Session | null | undefined>(undefined);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [selectedAccount, setSelectedAccount] = useState<Account | null>(null);
   const [trades, setTrades] = useState<Trade[]>([]);
@@ -29,6 +33,15 @@ function App() {
   const [isRunning, setIsRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [wsNotification, setWsNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  // Auth session listener
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => setSession(session));
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+    });
+    return () => subscription.unsubscribe();
+  }, []);
 
   // WebSocket for real-time updates
   const { connected: wsConnected, ws } = useWebSocket((data) => {
@@ -77,10 +90,11 @@ function App() {
   };
 
   useEffect(() => {
+    if (!session) return; // Only load when authenticated
     load();
     const interval = setInterval(load, 5000);
     return () => clearInterval(interval);
-  }, []);
+  }, [session]); // Re-run when session changes (i.e., after login)
 
   const handleAddToWatchlist = async (symbol: string) => {
     if (!selectedAccount) {
@@ -131,6 +145,20 @@ function App() {
     setWatchlistRefresh(watchlistRefresh + 1);
   };
 
+  // Show loading spinner while checking auth
+  if (session === undefined) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center">
+        <div className="text-white text-xl">⏳ Loading...</div>
+      </div>
+    );
+  }
+
+  // Show login page if not authenticated
+  if (!session) {
+    return <AuthPage />;
+  }
+
   return (
     <div className="min-h-screen bg-slate-900 text-white p-4">
       <header className="mb-6">
@@ -140,6 +168,13 @@ function App() {
             <p className="text-slate-400">Automated XAUUSD trading powered by MetaTrader 5</p>
           </div>
           <div className="flex flex-col items-end gap-1">
+            <button
+              onClick={() => supabase.auth.signOut()}
+              className="text-xs text-slate-400 hover:text-red-400 transition-colors mb-1"
+              title={`Signed in as ${session.user.email}`}
+            >
+              🔓 Sign Out ({session.user.email})
+            </button>
             <div className={`text-xs font-semibold px-3 py-1 rounded ${wsConnected ? 'bg-green-900 text-green-200' : 'bg-red-900 text-red-200'}`}>
               {wsConnected ? '🟢 Live' : '🔴 Offline'}
             </div>
@@ -205,7 +240,7 @@ function App() {
                   />
                 </div>
                 <div className="mt-4">
-                  <LivePositions accountId={selectedAccount.login} />
+                  <LivePositions key={selectedAccount.login} accountId={selectedAccount.login} />
                 </div>
                 <div className="mt-4">
                   <RenkoChart 
@@ -233,7 +268,7 @@ function App() {
             )}
             <TradeDashboard trades={trades} />
             {selectedAccount && (
-              <TradeHistory accountId={selectedAccount.login} />
+              <TradeHistory key={selectedAccount.login} accountId={selectedAccount.login} />
             )}
             <LogsViewer />
           </div>

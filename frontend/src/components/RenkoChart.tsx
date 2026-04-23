@@ -36,8 +36,9 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
   const priceRef = useRef<number>(0);
   const bidRef = useRef<number>(0);
   const askRef = useRef<number>(0);
-  const lastTimestampRef = useRef<string>('');
-  const isPendingRef = useRef<boolean>(false);  // Prevent duplicate requests
+  const wsRef = useRef<WebSocket | null>(null);
+  const reconnectTimerRef = useRef<number>(0);
+  const reconnectDelayRef = useRef<number>(1000);
   // Refs for crosshair - using refs avoids destroying/recreating the draw interval on every mouse move
   const mousePosRef = useRef<{ x: number; y: number } | null>(null);
   const crosshairPriceRef = useRef<number | null>(null);
@@ -82,76 +83,68 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
     setSymbol(initialSymbol);
   }, [initialSymbol]);
 
-  // Fetch chart data with efficient polling
+  // WebSocket-based chart streaming — replaces REST polling + bid/ask polling
   useEffect(() => {
-    const fetchChart = async () => {
-      try {
-        // Skip if request already pending (prevent stacked requests)
-        if (isPendingRef.current) {
-          console.log('Skipping duplicate request - one already in flight');
-          return;
-        }
-        
-        isPendingRef.current = true;
-        setCalculating(true);
-        const url = `${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/renko/chart/${symbol}?brick_size=${brickSize}&timeframe=${timeframe}`;
-        const res = await fetch(url);
+    const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+    const WS_BASE = API_URL.replace(/^https/, 'wss').replace(/^http/, 'ws');
+    const url = `${WS_BASE}/api/renko/stream/${symbol}?brick_size=${brickSize}`;
+    reconnectDelayRef.current = 1000;
 
-        if (!res.ok) {
-          throw new Error(`Failed to fetch chart: ${res.statusText}`);
-        }
+    const connect = () => {
+      const ws = new WebSocket(url);
+      wsRef.current = ws;
 
-        const data = await res.json();
-        
-        // Always update bid/ask immediately (even while calculating)
-        bidRef.current = data.bid || 0;
-        askRef.current = data.ask || 0;
-        priceRef.current = data.current_price || 0;
-        
-        // Update state to show bid/ask
-        setBid(data.bid || 0);
-        setAsk(data.ask || 0);
-        setCurrentPrice(data.current_price || 0);
-        
-        // Always clear error on successful fetch
+      ws.onopen = () => {
         setError(null);
+        setLoading(true);
+        reconnectDelayRef.current = 1000;
+      };
 
-        // Only update bricks if data changed (to avoid re-renders)
-        if (data.timestamp !== lastTimestampRef.current) {
-          lastTimestampRef.current = data.timestamp;
-          
-          bricksRef.current = data.bricks || [];
-          
-          if (loading) {
-            setBricks(data.bricks || []);
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.error) { setError(data.error); return; } // e.g. symbol not found
+
+          if (data.bid) { bidRef.current = data.bid; setBid(data.bid); }
+          if (data.ask) { askRef.current = data.ask; setAsk(data.ask); }
+          if (data.current_price) { priceRef.current = data.current_price; setCurrentPrice(data.current_price); }
+
+          // Full chart update when new candle bricks arrive
+          if (data.bricks && data.bricks.length > 0) {
+            bricksRef.current = data.bricks;
+            setBricks(data.bricks);
             setLoading(false);
+            setCalculating(false);
+            setChartData({
+              symbol: data.symbol || symbol,
+              brick_size: data.brick_size || brickSize,
+              current_direction: data.current_direction || 'long',
+              total_bricks: data.total_bricks || data.bricks.length,
+            });
           }
+        } catch { /* ignore parse errors */ }
+      };
 
-          // Always update chart metadata
-          setChartData({
-            symbol: data.symbol,
-            brick_size: data.brick_size,
-            current_direction: data.current_direction,
-            total_bricks: data.total_bricks,
-          });
-        }
-        setCalculating(false);
-      } catch (err) {
-        const errorMsg = err instanceof Error ? err.message : 'Failed to load chart';
-        setError(errorMsg);
-        setLoading(false);
-        setCalculating(false);
-      } finally {
-        isPendingRef.current = false;
-      }
+      ws.onclose = () => {
+        // Silent reconnect — keep last known data visible
+        reconnectTimerRef.current = window.setTimeout(() => {
+          reconnectDelayRef.current = Math.min(reconnectDelayRef.current * 1.5, 8000);
+          connect();
+        }, reconnectDelayRef.current);
+      };
+
+      ws.onerror = () => { /* onclose fires after onerror and handles reconnect */ };
     };
 
-    fetchChart();
-    // Increased to 2 seconds to prevent overwhelming backend with requests
-    // 500ms was causing 6+ stacked requests during 3-second calculations
-    const interval = setInterval(fetchChart, 2000);
-    return () => clearInterval(interval);
-  }, [symbol, brickSize, timeframe, loading]);
+    setLoading(true);
+    connect();
+
+    return () => {
+      clearTimeout(reconnectTimerRef.current);
+      wsRef.current?.close();
+      wsRef.current = null;
+    };
+  }, [symbol, brickSize, timeframe]);
 
   // Canvas drawing - uses refs so it redraws WITHOUT state updates
   useEffect(() => {
@@ -243,6 +236,13 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
       ctx.lineTo(width - rightPadding, height - bottomPadding);
       ctx.stroke();
 
+      // IST timezone label on X-axis
+      ctx.fillStyle = '#475569';
+      ctx.font = '9px "Segoe UI", Arial';
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'bottom';
+      ctx.fillText('IST (UTC+5:30)', width - rightPadding, height - 2);
+
       // ===== Draw X-axis Time Labels =====
       ctx.fillStyle = '#64748b';
       ctx.font = '10px "Segoe UI", Arial';
@@ -253,8 +253,9 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
         const brick = visibleBricks[idx];
         if (!brick.time) continue;
         const xCenter = leftPadding + (idx * brickSpacing) + brickSpacing / 2;
-        const d = new Date(brick.time * 1000);
-        const label = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+        const label = new Date(brick.time * 1000).toLocaleTimeString('en-IN', {
+          hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Kolkata'
+        });
         ctx.fillText(label, xCenter, height - bottomPadding + 6);
       }
 
@@ -401,9 +402,11 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
         if (brickIdx >= 0 && brickIdx < visibleBricks.length) {
           const hoveredBrick = visibleBricks[brickIdx];
           const timeLabel = hoveredBrick.time
-            ? new Date(hoveredBrick.time * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+            ? new Date(hoveredBrick.time * 1000).toLocaleTimeString('en-IN', {
+                hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false, timeZone: 'Asia/Kolkata'
+              })
             : `#${bricks.length - bricksToShow + brickIdx + 1}`;
-          const labelW = hoveredBrick.time ? 52 : 50;
+          const labelW = hoveredBrick.time ? 70 : 50;
           ctx.fillStyle = 'rgba(59, 130, 246, 0.95)';
           ctx.fillRect(x - labelW / 2, height - bottomPadding + 5, labelW, 22);
           ctx.strokeStyle = '#3b82f6';
@@ -421,22 +424,24 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
     // Draw continuously
     const animationFrame = setInterval(drawChart, 100);
     return () => clearInterval(animationFrame);
-  }, [symbol, chartData.brick_size, chartData.total_bricks]);
+  }, [symbol, loading, chartData.brick_size, chartData.total_bricks]);
 
-  // Mouse movement handler for crosshair
+  // Mouse movement handler for crosshair — uses polling to attach once canvas is available
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    let attached = false;
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
 
     const handleMouseMove = (e: MouseEvent) => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
       const rect = canvas.getBoundingClientRect();
-      const x = (e.clientX - rect.left) * (canvas.width / rect.width);
-      const y = (e.clientY - rect.top) * (canvas.height / rect.height);
+      const scaleX = canvas.width / rect.width;
+      const scaleY = canvas.height / rect.height;
+      const x = (e.clientX - rect.left) * scaleX;
+      const y = (e.clientY - rect.top) * scaleY;
 
-      // Update refs directly (no re-render, no interval restart)
       mousePosRef.current = { x, y };
 
-      // Calculate price from Y coordinate if bricks are available
       if (bricksRef.current.length > 0) {
         const bricks = bricksRef.current;
         const allPrices = bricks.flatMap(b => [b.open, b.close, b.high, b.low]);
@@ -453,33 +458,53 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
         const topPadding = 50;
         const chartHeight = canvasHeight - topPadding - bottomPadding;
 
-        // Convert Y pixel to price
         const price = chartMinPrice + ((canvasHeight - bottomPadding - y) / chartHeight) * chartPriceRange;
-
         crosshairPriceRef.current = price;
       }
     };
 
-    const handleMouseEnter = () => {
-      showCrosshairRef.current = true;
-    };
-
+    const handleMouseEnter = () => { showCrosshairRef.current = true; };
     const handleMouseLeave = () => {
       showCrosshairRef.current = false;
       mousePosRef.current = null;
       crosshairPriceRef.current = null;
     };
 
-    canvas.addEventListener('mousemove', handleMouseMove);
-    canvas.addEventListener('mouseenter', handleMouseEnter);
-    canvas.addEventListener('mouseleave', handleMouseLeave);
+    const attach = () => {
+      const canvas = canvasRef.current;
+      if (!canvas) return false;
+      canvas.addEventListener('mousemove', handleMouseMove);
+      canvas.addEventListener('mouseenter', handleMouseEnter);
+      canvas.addEventListener('mouseleave', handleMouseLeave);
+      return true;
+    };
+
+    // Try immediately, then poll every 100ms until canvas is in DOM
+    if (!attach()) {
+      pollTimer = setInterval(() => {
+        if (attach()) {
+          attached = true;
+          if (pollTimer) clearInterval(pollTimer);
+        }
+      }, 100);
+    } else {
+      attached = true;
+    }
 
     return () => {
-      canvas.removeEventListener('mousemove', handleMouseMove);
-      canvas.removeEventListener('mouseenter', handleMouseEnter);
-      canvas.removeEventListener('mouseleave', handleMouseLeave);
+      if (pollTimer) clearInterval(pollTimer);
+      const canvas = canvasRef.current;
+      if (canvas) {
+        canvas.removeEventListener('mousemove', handleMouseMove);
+        canvas.removeEventListener('mouseenter', handleMouseEnter);
+        canvas.removeEventListener('mouseleave', handleMouseLeave);
+      }
+      // Reset crosshair state when symbol changes
+      showCrosshairRef.current = false;
+      mousePosRef.current = null;
+      crosshairPriceRef.current = null;
     };
-  }, [loading, error]); // Re-run when loading/error changes - canvas not in DOM until loaded
+  }, [symbol, loading]); // Re-attach on symbol change and after loading completes
 
   if (error) {
     return (

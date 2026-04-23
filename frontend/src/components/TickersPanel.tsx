@@ -25,28 +25,51 @@ export default function TickersPanel({ onAddToWatchlist, watchlistSymbols }: Tic
   const [quotes, setQuotes] = useState<Record<string, Quote>>({});
   const [loading, setLoading] = useState(false);
 
-  const fetchQuote = async (symbol: string) => {
-    try {
-      const res = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/tickers/${symbol}/quote`);
-      if (res.ok) {
-        const quote = await res.json();
-        setQuotes(prev => ({ ...prev, [symbol]: quote }));
-      }
-    } catch (error) {
-      console.error(`Failed to fetch quote for ${symbol}:`, error);
-    }
-  };
-
   useEffect(() => {
     fetchTickers();
   }, []);
 
+  // WebSocket for real-time quotes — replaces REST polling
   useEffect(() => {
     if (tickers.length === 0) return;
-    // Single batch request instead of 18 individual requests every 2s
-    const interval = setInterval(fetchAllQuotes, 3000);
-    fetchAllQuotes(); // Immediate first fetch
-    return () => clearInterval(interval);
+
+    const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+    const WS_BASE = API_URL.replace(/^https/, 'wss').replace(/^http/, 'ws');
+    const url = `${WS_BASE}/ws/live`;
+    let ws: WebSocket;
+    let reconnectTimer: number;
+    let reconnectDelay = 1000;
+
+    const connect = () => {
+      ws = new WebSocket(url);
+
+      ws.onopen = () => {
+        ws.send(JSON.stringify({ symbols: tickers.map(t => t.symbol) }));
+        reconnectDelay = 1000;
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.quotes) setQuotes(prev => ({ ...prev, ...data.quotes }));
+        } catch { /* ignore */ }
+      };
+
+      ws.onclose = () => {
+        reconnectTimer = window.setTimeout(() => {
+          reconnectDelay = Math.min(reconnectDelay * 1.5, 8000);
+          connect();
+        }, reconnectDelay);
+      };
+
+      ws.onerror = () => { /* onclose handles reconnect */ };
+    };
+
+    connect();
+    return () => {
+      clearTimeout(reconnectTimer);
+      ws?.close();
+    };
   }, [tickers]);
 
   const fetchTickers = async () => {
@@ -56,30 +79,10 @@ export default function TickersPanel({ onAddToWatchlist, watchlistSymbols }: Tic
         const data = await res.json();
         const list = data.data || data || [];
         setTickers(Array.isArray(list) ? list : []);
-        // Fetch quotes immediately after tickers load
-        fetchAllQuotes();
       }
     } catch (error) {
       console.error('Failed to fetch tickers:', error);
     }
-  };
-
-  const fetchAllQuotes = async () => {
-    try {
-      // Batch endpoint — one request for all quotes
-      const res = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/tickers/quotes/batch`);
-      if (res.ok) {
-        const data = await res.json();
-        if (data.quotes) {
-          setQuotes(data.quotes);
-          return;
-        }
-      }
-    } catch {
-      // Fall back to individual calls if batch fails
-    }
-    // Fallback: fetch individual quotes in parallel
-    tickers.forEach(ticker => fetchQuote(ticker.symbol));
   };
 
   const getSpread = (symbol: string) => {

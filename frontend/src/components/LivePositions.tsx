@@ -32,28 +32,52 @@ export default function LivePositions({ accountId }: LivePositionsProps) {
   const [source, setSource] = useState<string>('');
 
   useEffect(() => {
-    const fetchPositions = async () => {
-      try {
-        setLoading(true);
-        // Try MT5 direct positions first (has real PnL)
-        const res = await fetch(
-          `${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/mt5/positions?account_id=${accountId}`
-        );
-        if (res.ok) {
-          const data = await res.json();
-          setPositions(data.data || []);
-          setSource(data.source || 'mt5');
-        }
-      } catch (error) {
-        console.error('Failed to fetch positions:', error);
-      } finally {
-        setLoading(false);
-      }
+    // Clear immediately when account changes
+    setPositions([]);
+    setSource('');
+    setLoading(true);
+
+    const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+    const WS_BASE = API_URL.replace(/^https/, 'wss').replace(/^http/, 'ws');
+    const url = `${WS_BASE}/ws/live`;
+    let ws: WebSocket;
+    let reconnectTimer: number;
+    let reconnectDelay = 1000;
+
+    const connect = () => {
+      ws = new WebSocket(url);
+
+      ws.onopen = () => {
+        ws.send(JSON.stringify({ symbols: [], account_id: accountId }));
+        reconnectDelay = 1000;
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.positions !== undefined) {
+            setPositions(data.positions || []);
+            setSource('mt5');
+            setLoading(false);
+          }
+        } catch { /* ignore */ }
+      };
+
+      ws.onclose = () => {
+        reconnectTimer = window.setTimeout(() => {
+          reconnectDelay = Math.min(reconnectDelay * 1.5, 8000);
+          connect();
+        }, reconnectDelay);
+      };
+
+      ws.onerror = () => { /* onclose handles reconnect */ };
     };
 
-    fetchPositions();
-    const interval = setInterval(fetchPositions, 3000); // Refresh every 3s for live PnL
-    return () => clearInterval(interval);
+    connect();
+    return () => {
+      clearTimeout(reconnectTimer);
+      ws?.close();
+    };
   }, [accountId]);
 
   const getSymbol = (pos: Position) => pos.symbol;
