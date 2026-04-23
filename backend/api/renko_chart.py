@@ -281,7 +281,9 @@ async def websocket_renko_chart(websocket: WebSocket, symbol: str):
                     # Get signal if bricks formed
                     signal = None
                     if new_bricks:
-                        signal = strategy.process(new_bricks)
+                        # Signal is a color reversal — last new brick determines direction
+                        last = new_bricks[-1]
+                        signal = {"type": "buy" if last.color == "green" else "sell"}
                     
                     # Send update to client
                     await websocket.send_json({
@@ -399,7 +401,9 @@ async def stream_renko_chart(websocket: WebSocket, symbol: str, brick_size: floa
 
                     signal = None
                     if len(all_bricks) > 0:
-                        signal = strategy.process(all_bricks)
+                        # Signal is based on the most recent brick color
+                        last_brick = all_bricks[-1]
+                        signal = {"type": "buy" if last_brick.color == "green" else "sell"}
 
                     msg = {
                         "symbol": symbol,
