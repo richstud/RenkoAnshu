@@ -380,6 +380,7 @@ async def stream_renko_chart(websocket: WebSocket, symbol: str, brick_size: floa
                         renko.feed_tick(rate['close'], _mt5_ts_to_utc(int(rate['time'])))
                     
                     # Get brick history (last 100)
+                    all_bricks = renko.history(100)
 
                     chart_data = []
                     prev_color = None

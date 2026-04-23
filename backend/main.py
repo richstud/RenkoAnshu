@@ -292,16 +292,27 @@ async def websocket_live_data(websocket: WebSocket):
     await websocket.accept()
     import MetaTrader5 as mt5_module
     symbols = []
+    account_id = None
     try:
         # First message must contain subscription info
         try:
             msg = await asyncio.wait_for(websocket.receive_json(), timeout=10.0)
             symbols = msg.get("symbols", [])
+            account_id = msg.get("account_id", None)
         except (asyncio.TimeoutError, Exception):
             pass
 
         while True:
             update: dict = {}
+
+            # Switch to the requested account if specified
+            if account_id:
+                session = mt5_manager.get_session(int(account_id))
+                if session:
+                    try:
+                        session.switch_to()
+                    except Exception as sw_err:
+                        logger.warning(f"ws/live switch to {account_id} failed: {sw_err}")
 
             # Live quotes for subscribed symbols
             if symbols:
