@@ -24,9 +24,10 @@ type Position = {
 
 interface LivePositionsProps {
   accountId: number;
+  onAccountInfo?: (info: { balance: number; equity: number; margin: number; free_margin: number }) => void;
 }
 
-export default function LivePositions({ accountId }: LivePositionsProps) {
+export default function LivePositions({ accountId, onAccountInfo }: LivePositionsProps) {
   const [positions, setPositions] = useState<Position[]>([]);
   const [loading, setLoading] = useState(false);
   const [source, setSource] = useState<string>('');
@@ -59,6 +60,9 @@ export default function LivePositions({ accountId }: LivePositionsProps) {
             setPositions(data.positions || []);
             setSource('mt5');
             setLoading(false);
+          }
+          if (data.account && onAccountInfo) {
+            onAccountInfo(data.account);
           }
         } catch { /* ignore */ }
       };

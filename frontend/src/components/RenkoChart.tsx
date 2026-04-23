@@ -20,7 +20,15 @@ interface RenkoChartProps {
 
 export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBrickSize, accountId, onAddToWatchlist }: RenkoChartProps) {
   const [symbol, setSymbol] = useState<string>(initialSymbol || 'EURUSD');
-  const [brickSize, setBrickSize] = useState<number>(initialBrickSize || 0.005);
+  // Use symbol-aware default brick size: Gold/XAUUSD → 5.0, JPY pairs → 0.05, everything else → 0.005
+  const getDefaultBrickSize = (sym: string) => {
+    const s = sym.toUpperCase();
+    if (s === 'GOLD' || s === 'XAUUSD') return 5.0;
+    if (s === 'BTCUSD' || s === 'BITCOIN') return 100.0;
+    if (s.includes('JPY')) return 0.05;
+    return 0.005;
+  };
+  const [brickSize, setBrickSize] = useState<number>(initialBrickSize || getDefaultBrickSize(initialSymbol || 'EURUSD'));
   const [timeframe, setTimeframe] = useState<number>(1); // 1 or 5 minutes
   const [bricks, setBricks] = useState<RenkoBrick[]>([]);
   const [currentPrice, setCurrentPrice] = useState<number>(0);
@@ -78,9 +86,12 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
     fetchSymbols();
   }, []);
 
-  // Update when initial symbol changes
+  // Update symbol and reset brick size to symbol-appropriate default when prop changes
   useEffect(() => {
     setSymbol(initialSymbol);
+    if (!initialBrickSize) {
+      setBrickSize(getDefaultBrickSize(initialSymbol));
+    }
   }, [initialSymbol]);
 
   // WebSocket-based chart streaming — replaces REST polling + bid/ask polling
@@ -89,8 +100,14 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
     const WS_BASE = API_URL.replace(/^https/, 'wss').replace(/^http/, 'ws');
     const url = `${WS_BASE}/api/renko/stream/${symbol}?brick_size=${brickSize}`;
     reconnectDelayRef.current = 1000;
+    // `active` flag prevents the old onclose from scheduling a reconnect
+    // after the effect cleanup intentionally closes the socket (e.g. when
+    // brick_size or symbol changes). Without this flag, the old closure races
+    // with the new effect, reopening a socket with the OLD brick_size.
+    let active = true;
 
     const connect = () => {
+      if (!active) return;
       const ws = new WebSocket(url);
       wsRef.current = ws;
 
@@ -101,15 +118,15 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
       };
 
       ws.onmessage = (event) => {
+        if (!active) return;
         try {
           const data = JSON.parse(event.data);
-          if (data.error) { setError(data.error); return; } // e.g. symbol not found
+          if (data.error) { setError(data.error); return; }
 
           if (data.bid) { bidRef.current = data.bid; setBid(data.bid); }
           if (data.ask) { askRef.current = data.ask; setAsk(data.ask); }
           if (data.current_price) { priceRef.current = data.current_price; setCurrentPrice(data.current_price); }
 
-          // Full chart update when new candle bricks arrive
           if (data.bricks && data.bricks.length > 0) {
             bricksRef.current = data.bricks;
             setBricks(data.bricks);
@@ -117,7 +134,8 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
             setCalculating(false);
             setChartData({
               symbol: data.symbol || symbol,
-              brick_size: data.brick_size || brickSize,
+              // Use server-provided brick_size if valid, else keep the user-set value
+              brick_size: (data.brick_size && data.brick_size > 0) ? data.brick_size : brickSize,
               current_direction: data.current_direction || 'long',
               total_bricks: data.total_bricks || data.bricks.length,
             });
@@ -126,7 +144,7 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
       };
 
       ws.onclose = () => {
-        // Silent reconnect — keep last known data visible
+        if (!active) return; // intentional close — don't reconnect
         reconnectTimerRef.current = window.setTimeout(() => {
           reconnectDelayRef.current = Math.min(reconnectDelayRef.current * 1.5, 8000);
           connect();
@@ -137,9 +155,12 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
     };
 
     setLoading(true);
+    setBricks([]);
+    bricksRef.current = [];
     connect();
 
     return () => {
+      active = false; // prevent onclose from triggering reconnect
       clearTimeout(reconnectTimerRef.current);
       wsRef.current?.close();
       wsRef.current = null;
@@ -542,6 +563,7 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
                   key={s}
                   onClick={() => {
                     setSymbol(s);
+                    setBrickSize(getDefaultBrickSize(s));
                     setSymbolSearch('');
                     setShowDropdown(false);
                     setAddedToWatchlist(null);
@@ -566,14 +588,19 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
             type="number"
             value={brickSize}
             onChange={(e) => {
-              setBrickSize(parseFloat(e.target.value) || 0.001);
-              setLoading(true);
+              const val = parseFloat(e.target.value);
+              if (!isNaN(val) && val > 0) setBrickSize(val);
             }}
-            step="0.001"
-            min="0.001"
-            max="100"
+            onBlur={(e) => {
+              // Only reconnect WebSocket on blur (not on every keystroke)
+              const val = parseFloat(e.target.value);
+              if (!isNaN(val) && val > 0) { setBrickSize(val); setLoading(true); }
+            }}
+            step={brickSize >= 1 ? "1" : "0.001"}
+            min="0.0001"
+            max="10000"
             className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-emerald-500"
-            placeholder="0.005"
+            placeholder={String(getDefaultBrickSize(symbol))}
           />
         </div>
 

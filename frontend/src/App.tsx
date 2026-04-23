@@ -17,7 +17,7 @@ import { useWebSocket } from './hooks/useWebSocket';
 import type { Session } from '@supabase/supabase-js';
 
 export type Trade = { id: number; account_id: number; symbol: string; type: string; lot: number; entry_price: number; exit_price?: number; profit?: number; timestamp: string };
-export type Account = { id: number; login: number; server: string; status: string };
+export type Account = { id: number; login: number; server: string; status: string; balance?: number; equity?: number; name?: string };
 
 function App() {
   const [session, setSession] = useState<Session | null | undefined>(undefined);
@@ -240,7 +240,18 @@ function App() {
                   />
                 </div>
                 <div className="mt-4">
-                  <LivePositions key={selectedAccount.login} accountId={selectedAccount.login} />
+                  <LivePositions
+                    key={selectedAccount.login}
+                    accountId={selectedAccount.login}
+                    onAccountInfo={(info) => {
+                      setAccounts(prev => prev.map(a =>
+                        a.login === selectedAccount.login
+                          ? { ...a, balance: info.balance, equity: info.equity }
+                          : a
+                      ));
+                      setSelectedAccount(prev => prev ? { ...prev, balance: info.balance, equity: info.equity } : prev);
+                    }}
+                  />
                 </div>
                 <div className="mt-4">
                   <RenkoChart 

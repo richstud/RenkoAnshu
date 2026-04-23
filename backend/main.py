@@ -314,6 +314,21 @@ async def websocket_live_data(websocket: WebSocket):
                     except Exception as sw_err:
                         logger.warning(f"ws/live switch to {account_id} failed: {sw_err}")
 
+            # Account balance/equity for the selected account
+            if account_id:
+                try:
+                    acct_info = mt5_module.account_info()
+                    if acct_info is not None:
+                        update["account"] = {
+                            "login": acct_info.login,
+                            "balance": round(float(acct_info.balance), 2),
+                            "equity": round(float(acct_info.equity), 2),
+                            "margin": round(float(acct_info.margin), 2),
+                            "free_margin": round(float(acct_info.margin_free), 2),
+                        }
+                except Exception:
+                    pass
+
             # Live quotes for subscribed symbols
             if symbols:
                 quotes = {}
