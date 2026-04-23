@@ -37,6 +37,37 @@ except ImportError:
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/renko", tags=["renko"])
 
+# Common symbol aliases — broker may use different names
+SYMBOL_ALIASES = {
+    "XAUUSD": ["GOLD", "XAUUSDm", "XAUUSD.", "GOLD."],
+    "GOLD":   ["XAUUSD", "XAUUSDm", "XAUUSD."],
+    "XAGUSD": ["SILVER", "XAGUSDm"],
+    "SILVER": ["XAGUSD", "XAGUSDm"],
+    "BTCUSD": ["BTCUSD.", "BTCUSDm", "BTC/USD"],
+    "ETHUSD": ["ETHUSD.", "ETHUSDm", "ETH/USD"],
+}
+
+def resolve_mt5_symbol(symbol: str) -> str:
+    """Resolve symbol to the name MT5/broker actually recognizes.
+    Tries exact match first, then known aliases."""
+    info = mt5.symbol_info(symbol)
+    if info is not None:
+        return symbol
+    for alias in SYMBOL_ALIASES.get(symbol.upper(), []):
+        info = mt5.symbol_info(alias)
+        if info is not None:
+            logger.info(f"🔀 Symbol {symbol} resolved to broker alias: {alias}")
+            return alias
+    # Last resort: search MT5 symbol list for partial match
+    all_symbols = mt5.symbols_get()
+    if all_symbols:
+        upper = symbol.upper().replace("USD", "")
+        for s in all_symbols:
+            if upper in s.name.upper():
+                logger.info(f"🔀 Symbol {symbol} fuzzy-resolved to: {s.name}")
+                return s.name
+    return symbol  # Return original — caller will get the proper error
+
 # Store Renko engines per symbol
 renko_engines = {}
 strategy_engines = {}
@@ -141,11 +172,15 @@ async def get_renko_chart(symbol: str, brick_size: float = None, timeframe: int 
                 "GBPUSD": 0.005,
                 "USDJPY": 0.05,
                 "GOLD": 5.0,
+                "XAUUSD": 5.0,
                 "BTCUSD": 1.0,
-                "XPTUSD": 0.0005,  # Platinum - small brick size
-                "XPDUSD": 0.0005,  # Palladium - small brick size
+                "XPTUSD": 0.0005,
+                "XPDUSD": 0.0005,
             }
             brick_size = brick_sizes.get(symbol, 0.01)
+
+        # Resolve broker symbol name (e.g. XAUUSD → GOLD)
+        symbol = resolve_mt5_symbol(symbol)
         
         cache_key = f"{symbol}_{brick_size}_{timeframe}"
         current_time = time.time()
@@ -158,9 +193,9 @@ async def get_renko_chart(symbol: str, brick_size: float = None, timeframe: int 
                 cached_data["timestamp"] = datetime.now().isoformat()
                 return cached_data
         
-        # Get symbol info from MT5
+        # Verify symbol exists in MT5
         symbol_info = mt5.symbol_info(symbol)
-        if not symbol_info:
+        if symbol_info is None:
             raise HTTPException(status_code=404, detail=f"Symbol {symbol} not found in MT5")
         
         # Select timeframe
@@ -233,17 +268,21 @@ async def websocket_renko_chart(websocket: WebSocket, symbol: str):
     await websocket.accept()
     
     try:
+        # Resolve broker symbol name (e.g. XAUUSD → GOLD)
+        symbol = resolve_mt5_symbol(symbol)
+
         # Get default brick size
         brick_sizes = {
             "EURUSD": 0.005,
             "GOLD": 5.0,
+            "XAUUSD": 5.0,
             "BTCUSD": 1.0,
         }
         brick_size = brick_sizes.get(symbol, 0.01)
         
         # Verify symbol exists in MT5
         symbol_info = mt5.symbol_info(symbol)
-        if not symbol_info:
+        if symbol_info is None:
             await websocket.send_json({
                 "error": f"Symbol {symbol} not found in MT5"
             })
@@ -325,6 +364,9 @@ async def stream_renko_chart(websocket: WebSocket, symbol: str, brick_size: floa
     await websocket.accept()
     
     try:
+        # Resolve broker symbol name (e.g. XAUUSD → GOLD)
+        symbol = resolve_mt5_symbol(symbol)
+
         # Get default brick size
         if brick_size is None:
             brick_sizes = {
@@ -332,13 +374,14 @@ async def stream_renko_chart(websocket: WebSocket, symbol: str, brick_size: floa
                 "GBPUSD": 0.005,
                 "USDJPY": 0.05,
                 "GOLD": 5.0,
+                "XAUUSD": 5.0,
                 "BTCUSD": 1.0,
             }
             brick_size = brick_sizes.get(symbol, 0.01)
         
         # Verify symbol exists in MT5
         symbol_info = mt5.symbol_info(symbol)
-        if not symbol_info:
+        if symbol_info is None:
             await websocket.send_json({
                 "error": f"Symbol {symbol} not found in MT5"
             })
