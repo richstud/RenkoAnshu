@@ -286,10 +286,66 @@ async def websocket_endpoint(websocket: WebSocket):
         ws_manager.disconnect(websocket)
         logger.info(f"WebSocket connection closed")
 
+@app.websocket("/ws/live")
+async def websocket_live_data(websocket: WebSocket):
+    """Real-time quotes + positions streaming — tick by tick, 10x per second"""
+    await websocket.accept()
+    import MetaTrader5 as mt5_module
+    symbols = []
+    try:
+        # First message must contain subscription info
+        try:
+            msg = await asyncio.wait_for(websocket.receive_json(), timeout=10.0)
+            symbols = msg.get("symbols", [])
+        except (asyncio.TimeoutError, Exception):
+            pass
 
-# ===================================
-# Manual Trade Execution Endpoints
-# ===================================
+        while True:
+            update: dict = {}
+
+            # Live quotes for subscribed symbols
+            if symbols:
+                quotes = {}
+                for sym in symbols:
+                    tick = mt5_module.symbol_info_tick(sym)
+                    if tick:
+                        quotes[sym] = {
+                            "bid": float(tick.bid),
+                            "ask": float(tick.ask),
+                            "time": int(tick.time),
+                        }
+                update["quotes"] = quotes
+
+            # Live positions (current MT5 account) — positions is a numpy array, must use `is not None`
+            positions = mt5_module.positions_get()
+            pos_iter = positions if positions is not None else []
+            update["positions"] = [
+                {
+                    "ticket": p.ticket,
+                    "symbol": p.symbol,
+                    "type": "buy" if p.type == 0 else "sell",
+                    "volume": p.volume,
+                    "open_price": p.price_open,
+                    "current_price": p.price_current,
+                    "sl": p.sl,
+                    "tp": p.tp,
+                    "profit": round(p.profit, 2),
+                    "swap": round(p.swap, 2),
+                    "open_time": p.time,
+                }
+                for p in pos_iter
+            ]
+
+            await websocket.send_json(update)
+            await asyncio.sleep(0.1)  # 100ms = 10 updates per second
+
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        logger.error(f"Live WebSocket error: {e}")
+
+
+
 
 class TradeRequest(BaseModel):
     account_id: int
