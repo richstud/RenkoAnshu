@@ -339,24 +339,27 @@ async def stream_renko_chart(websocket: WebSocket, symbol: str, brick_size: floa
         skip_count = 0
         
         while True:
-            # Get latest 1-min candles from MT5
+            # Get latest 1-min candles and live tick from MT5
             rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M1, 0, 100)
-            
+            tick = mt5.symbol_info_tick(symbol)
+
+            bid = float(tick.bid) if tick else None
+            ask = float(tick.ask) if tick else None
+            tick_price = float(tick.last) if tick and tick.last > 0 else bid
+
             if rates and len(rates) > 0:
                 latest_time = rates[-1]['time']
-                
-                # Only process if new candle
+                candle_close = float(rates[-1]['close'])
+                current_price = tick_price or candle_close
+
                 if latest_time != last_candle_time:
                     last_candle_time = latest_time
-                    
-                    # Feed all recent prices
+
                     for rate in rates[-10:]:
                         renko.feed_tick(rate['close'])
-                    
-                    # Get brick history (last 100)
+
                     all_bricks = renko.history(100)
-                    
-                    # Format for frontend — only mark reversal bricks with signal
+
                     chart_data = []
                     prev_color = None
                     for i, brick in enumerate(all_bricks):
@@ -371,39 +374,41 @@ async def stream_renko_chart(websocket: WebSocket, symbol: str, brick_size: floa
                             "signal": ("BUY" if brick.color == "green" else "SELL") if is_reversal else None,
                         })
                         prev_color = brick.color
-                    
-                    # Get signal from strategy
+
                     signal = None
                     if len(all_bricks) > 0:
                         signal = strategy.process(all_bricks)
-                    
-                    # Send complete update to client
-                    await websocket.send_json({
+
+                    msg = {
                         "symbol": symbol,
                         "brick_size": brick_size,
                         "bricks": chart_data,
                         "total_bricks": len(all_bricks),
-                        "current_price": float(rates[-1]['close']),
+                        "current_price": current_price,
                         "current_direction": renko.direction(),
                         "signal": signal['type'].upper() if signal else None,
                         "timestamp": datetime.fromtimestamp(rates[-1]['time']).isoformat(),
                         "data_source": "MT5_LIVE_STREAM",
-                    })
-                    
+                    }
+                    if bid: msg["bid"] = bid
+                    if ask: msg["ask"] = ask
+                    await websocket.send_json(msg)
                     skip_count = 0
                 else:
                     skip_count += 1
-                    # Still send price updates even if candle unchanged
+                    # Send tick update every 5 loops (every 500ms)
                     if skip_count >= 5:
                         skip_count = 0
-                        current_price = float(rates[-1]['close'])
-                        await websocket.send_json({
+                        msg = {
                             "symbol": symbol,
                             "current_price": current_price,
-                            "data_source": "MT5_PRICE_UPDATE",
-                        })
-            
-            # Update very frequently for smooth real-time
+                            "data_source": "MT5_TICK_UPDATE",
+                        }
+                        if bid: msg["bid"] = bid
+                        if ask: msg["ask"] = ask
+                        await websocket.send_json(msg)
+
+            # 100ms loop — 10 updates per second
             await asyncio.sleep(0.1)
     
     except WebSocketDisconnect:
