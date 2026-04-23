@@ -248,7 +248,7 @@ async def websocket_renko_chart(websocket: WebSocket, symbol: str):
             # Get latest 1-min candle from MT5
             rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M1, 0, 10)
             
-            if rates and len(rates) > 0:
+            if rates is not None and len(rates) > 0:
                 latest_time = rates[-1]['time']
                 
                 # Only process if new candle
@@ -347,7 +347,7 @@ async def stream_renko_chart(websocket: WebSocket, symbol: str, brick_size: floa
             ask = float(tick.ask) if tick else None
             tick_price = float(tick.last) if tick and tick.last > 0 else bid
 
-            if rates and len(rates) > 0:
+            if rates is not None and len(rates) > 0:
                 latest_time = rates[-1]['time']
                 candle_close = float(rates[-1]['close'])
                 current_price = tick_price or candle_close

@@ -320,8 +320,9 @@ async def websocket_live_data(websocket: WebSocket):
                         }
                 update["quotes"] = quotes
 
-            # Live positions (current MT5 account)
+            # Live positions (current MT5 account) — positions is a numpy array, must use `is not None`
             positions = mt5_module.positions_get()
+            pos_iter = positions if positions is not None else []
             update["positions"] = [
                 {
                     "ticket": p.ticket,
@@ -336,7 +337,7 @@ async def websocket_live_data(websocket: WebSocket):
                     "swap": round(p.swap, 2),
                     "open_time": p.time,
                 }
-                for p in (positions or [])
+                for p in pos_iter
             ]
 
             await websocket.send_json(update)
