@@ -302,6 +302,18 @@ async def websocket_live_data(websocket: WebSocket):
         except (asyncio.TimeoutError, Exception):
             pass
 
+        # Ensure all subscribed symbols are in MT5 Market Watch so ticks arrive
+        if symbols:
+            def _select_symbols():
+                for sym in symbols:
+                    try:
+                        mt5_module.symbol_select(sym, True)
+                    except Exception:
+                        pass
+            import asyncio as _aio
+            loop = _aio.get_event_loop()
+            await loop.run_in_executor(None, _select_symbols)
+
         while True:
             update: dict = {}
 

@@ -23,11 +23,25 @@ interface TickersPanelProps {
 export default function TickersPanel({ onAddToWatchlist, watchlistSymbols }: TickersPanelProps) {
   const [tickers, setTickers] = useState<Ticker[]>([]);
   const [quotes, setQuotes] = useState<Record<string, Quote>>({});
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     fetchTickers();
   }, []);
+
+  // Fetch initial quotes via REST so they appear immediately on load
+  useEffect(() => {
+    if (tickers.length === 0) return;
+    const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+    fetch(`${API_URL}/api/tickers/quotes/batch`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (data?.quotes && Object.keys(data.quotes).length > 0) {
+          setQuotes(prev => ({ ...prev, ...data.quotes }));
+        }
+      })
+      .catch(() => {});
+  }, [tickers]);
 
   // WebSocket for real-time quotes — replaces REST polling
   useEffect(() => {
@@ -39,8 +53,10 @@ export default function TickersPanel({ onAddToWatchlist, watchlistSymbols }: Tic
     let ws: WebSocket;
     let reconnectTimer: number;
     let reconnectDelay = 1000;
+    let active = true;
 
     const connect = () => {
+      if (!active) return;
       ws = new WebSocket(url);
 
       ws.onopen = () => {
@@ -49,13 +65,17 @@ export default function TickersPanel({ onAddToWatchlist, watchlistSymbols }: Tic
       };
 
       ws.onmessage = (event) => {
+        if (!active) return;
         try {
           const data = JSON.parse(event.data);
-          if (data.quotes) setQuotes(prev => ({ ...prev, ...data.quotes }));
+          if (data.quotes && Object.keys(data.quotes).length > 0) {
+            setQuotes(prev => ({ ...prev, ...data.quotes }));
+          }
         } catch { /* ignore */ }
       };
 
       ws.onclose = () => {
+        if (!active) return;
         reconnectTimer = window.setTimeout(() => {
           reconnectDelay = Math.min(reconnectDelay * 1.5, 8000);
           connect();
@@ -67,12 +87,14 @@ export default function TickersPanel({ onAddToWatchlist, watchlistSymbols }: Tic
 
     connect();
     return () => {
+      active = false;
       clearTimeout(reconnectTimer);
       ws?.close();
     };
   }, [tickers]);
 
   const fetchTickers = async () => {
+    setLoading(true);
     try {
       const res = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/tickers`);
       if (res.ok) {
@@ -82,6 +104,8 @@ export default function TickersPanel({ onAddToWatchlist, watchlistSymbols }: Tic
       }
     } catch (error) {
       console.error('Failed to fetch tickers:', error);
+    } finally {
+      setLoading(false);
     }
   };
 
