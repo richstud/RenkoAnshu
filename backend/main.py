@@ -151,9 +151,9 @@ def add_account(account: AccountPayload):
     data = {
         "login": account.login,
         "server": account.server,
-        "status": "added",
+        "status": "active",
     }
-    supabase_client.table("accounts").insert(data).execute()
+    supabase_client.table("accounts").upsert(data, on_conflict="login").execute()
     return {"message": "Account added"}
 
 @app.get("/api/accounts")
