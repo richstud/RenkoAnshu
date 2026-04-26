@@ -19,7 +19,7 @@ export default function AccountManager() {
   const [formData, setFormData] = useState({
     login: '',
     password: '',
-    server: 'XMGlobal-MT5 6'
+    server: 'XMGlobal-MT5 7'
   });
 
   const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';

@@ -107,49 +107,96 @@ async def get_all_mt5_symbols(search: str = Query(default='', description="Searc
         raise HTTPException(status_code=500, detail=str(e))
 
 
+_DEFAULT_SYMBOLS = [
+    {"id": 1, "symbol": "XAUUSD", "description": "Gold vs USD", "pip_value": 0.01, "is_active": True},
+    {"id": 2, "symbol": "GOLD", "description": "Gold vs USD (XM)", "pip_value": 0.01, "is_active": True},
+    {"id": 3, "symbol": "EURUSD", "description": "EUR vs USD", "pip_value": 0.0001, "is_active": True},
+    {"id": 4, "symbol": "GBPUSD", "description": "GBP vs USD", "pip_value": 0.0001, "is_active": True},
+    {"id": 5, "symbol": "USDJPY", "description": "USD vs JPY", "pip_value": 0.01, "is_active": True},
+    {"id": 6, "symbol": "AUDUSD", "description": "AUD vs USD", "pip_value": 0.0001, "is_active": True},
+    {"id": 7, "symbol": "USDCAD", "description": "USD vs CAD", "pip_value": 0.0001, "is_active": True},
+    {"id": 8, "symbol": "USDCHF", "description": "USD vs CHF", "pip_value": 0.0001, "is_active": True},
+    {"id": 9, "symbol": "BTCUSD", "description": "Bitcoin vs USD", "pip_value": 1.0, "is_active": True},
+    {"id": 10, "symbol": "ETHUSD", "description": "Ethereum vs USD", "pip_value": 0.1, "is_active": True},
+]
+
+
 @router.get("/tickers")
 async def get_tickers():
-    """Get all available tickers. Result cached 60s to avoid repeated MT5 blocking calls."""
+    """Get all available tickers.
+
+    Works in 3 tiers:
+    1. Supabase available_symbols table (if populated)
+    2. MT5 popular symbol list (if connected)
+    3. Hardcoded default list — always works as fallback so UI is never blank.
+    """
     global _tickers_cache, _tickers_cache_time
     try:
         now = time.time()
         if _tickers_cache is not None and (now - _tickers_cache_time) < _TICKERS_CACHE_TTL:
             return _tickers_cache
 
-        import MetaTrader5 as mt5
-        import asyncio
+        # Tier 1: Supabase database
+        db_data = []
+        try:
+            resp = supabase_client.table('available_symbols').select('*').eq('is_active', True).execute()
+            db_data = resp.data or []
+        except Exception as db_err:
+            logger.warning(f"Could not query available_symbols table: {db_err}")
 
-        symbols = supabase_client.table('available_symbols').select('*').eq('is_active', True).execute()
+        if db_data:
+            symbol_list = db_data
+            logger.info(f"📋 Loaded {len(symbol_list)} symbols from Supabase")
+        else:
+            # Tier 2: MT5 popular symbols
+            import asyncio
+            import MetaTrader5 as mt5
 
-        # Run MT5 availability check in thread to avoid blocking event loop
-        def check_availability():
-            available = []
-            for symbol_data in symbols.data:
-                symbol = symbol_data['symbol']
-                try:
-                    if mt5.symbol_info(symbol) is not None:
-                        available.append(symbol_data)
-                    else:
-                        logger.warning(f"⚠️ Symbol {symbol} not found in MT5 - skipping")
-                except Exception as e:
-                    logger.warning(f"Error checking symbol {symbol}: {e}")
-            return available
+            def get_mt5_popular():
+                result = []
+                for s in _DEFAULT_SYMBOLS:
+                    try:
+                        info = mt5.symbol_info(s["symbol"])
+                        if info is not None:
+                            result.append({
+                                "id": s["id"],
+                                "symbol": info.name,
+                                "description": info.description or s["description"],
+                                "pip_value": float(info.point) if info.point else s["pip_value"],
+                                "is_active": True,
+                            })
+                    except Exception:
+                        pass
+                return result
 
-        loop = asyncio.get_event_loop()
-        available = await loop.run_in_executor(None, check_availability)
+            try:
+                loop = asyncio.get_event_loop()
+                symbol_list = await asyncio.wait_for(
+                    loop.run_in_executor(None, get_mt5_popular), timeout=5.0
+                )
+            except Exception:
+                symbol_list = []
+
+            if not symbol_list:
+                # Tier 3: hardcoded defaults — always works
+                symbol_list = _DEFAULT_SYMBOLS
+                logger.info("📋 Using hardcoded default symbol list (DB empty, MT5 offline)")
+            else:
+                logger.info(f"📋 Built {len(symbol_list)} symbols from MT5")
 
         result = {
-            "count": len(available),
-            "total": len(symbols.data),
-            "unavailable": len(symbols.data) - len(available),
-            "data": available
+            "count": len(symbol_list),
+            "total": len(symbol_list),
+            "unavailable": 0,
+            "data": symbol_list,
         }
         _tickers_cache = result
         _tickers_cache_time = now
         return result
     except Exception as e:
         logger.error(f"Error getting tickers: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        # Never crash — return defaults so the UI still works
+        return {"count": len(_DEFAULT_SYMBOLS), "total": len(_DEFAULT_SYMBOLS), "unavailable": 0, "data": _DEFAULT_SYMBOLS}
 
 
 @router.get("/tickers/{symbol}/quote")

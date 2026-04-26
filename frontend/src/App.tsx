@@ -98,7 +98,8 @@ function App() {
 
   const handleAddToWatchlist = async (symbol: string) => {
     if (!selectedAccount) {
-      alert('Please select an account first');
+      setWsNotification({ type: 'error', message: '⚠️ Select an account first to add to watchlist' });
+      setTimeout(() => setWsNotification(null), 3000);
       return;
     }
 
@@ -226,46 +227,42 @@ function App() {
         {/* Main Dashboard */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           <div className="lg:col-span-2">
-            {selectedAccount ? (
-              <>
-                <TickersPanel 
-                  onAddToWatchlist={handleAddToWatchlist}
-                  watchlistSymbols={watchlistSymbols}
+            <TickersPanel 
+              onAddToWatchlist={handleAddToWatchlist}
+              watchlistSymbols={watchlistSymbols}
+            />
+            {selectedAccount && (
+              <div className="mt-4">
+                <WatchlistManager 
+                  accountId={selectedAccount.login}
+                  onUpdate={handleWatchlistUpdate}
+                  refreshTrigger={watchlistRefresh}
                 />
-                <div className="mt-4">
-                  <WatchlistManager 
-                    accountId={selectedAccount.login}
-                    onUpdate={handleWatchlistUpdate}
-                    refreshTrigger={watchlistRefresh}
-                  />
-                </div>
-                <div className="mt-4">
-                  <LivePositions
-                    key={selectedAccount.login}
-                    accountId={selectedAccount.login}
-                    onAccountInfo={(info) => {
-                      setAccounts(prev => prev.map(a =>
-                        a.login === selectedAccount.login
-                          ? { ...a, balance: info.balance, equity: info.equity }
-                          : a
-                      ));
-                      setSelectedAccount(prev => prev ? { ...prev, balance: info.balance, equity: info.equity } : prev);
-                    }}
-                  />
-                </div>
-                <div className="mt-4">
-                  <RenkoChart 
-                    symbol={selectedSymbol || 'EURUSD'} 
-                    accountId={selectedAccount.login}
-                    onAddToWatchlist={handleAddToWatchlist}
-                  />
-                </div>
-              </>
-            ) : (
-              <div className="bg-slate-800 p-8 rounded-lg text-center text-slate-400">
-                Select an account to start trading
               </div>
             )}
+            {selectedAccount && (
+              <div className="mt-4">
+                <LivePositions
+                  key={selectedAccount.login}
+                  accountId={selectedAccount.login}
+                  onAccountInfo={(info) => {
+                    setAccounts(prev => prev.map(a =>
+                      a.login === selectedAccount.login
+                        ? { ...a, balance: info.balance, equity: info.equity }
+                        : a
+                    ));
+                    setSelectedAccount(prev => prev ? { ...prev, balance: info.balance, equity: info.equity } : prev);
+                  }}
+                />
+              </div>
+            )}
+            <div className="mt-4">
+              <RenkoChart 
+                symbol={selectedSymbol || 'XAUUSD'} 
+                accountId={selectedAccount?.login}
+                onAddToWatchlist={handleAddToWatchlist}
+              />
+            </div>
           </div>
 
           <div className="space-y-4">
