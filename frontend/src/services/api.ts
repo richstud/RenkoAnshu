@@ -23,7 +23,7 @@ export const getAccounts = async () => {
   const result = await request('/api/accounts');
   const data = result?.data || result || [];
   return Array.isArray(data) ? data : [
-    { id: 1, login: 101510620, server: 'XMGlobal-MT5 10', status: 'active' }
+    { id: 1, login: 316923999, server: 'XMGlobal-MT5 7', status: 'active' }
   ];
 };
 
