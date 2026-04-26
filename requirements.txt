@@ -5,3 +5,4 @@ pydantic-settings
 MetaTrader5
 supabase
 python-dotenv
+tzdata
