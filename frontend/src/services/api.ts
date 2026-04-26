@@ -18,13 +18,11 @@ async function request(path: string, opts: RequestInit = {}) {
   }
 }
 
-// Accounts - return mock data if backend is unavailable
+// Accounts - return empty array if backend is unavailable
 export const getAccounts = async () => {
   const result = await request('/api/accounts');
   const data = result?.data || result || [];
-  return Array.isArray(data) ? data : [
-    { id: 1, login: 316923999, server: 'XMGlobal-MT5 7', status: 'active' }
-  ];
+  return Array.isArray(data) ? data : [];
 };
 
 // Trades - return empty if backend is unavailable
