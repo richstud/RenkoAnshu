@@ -98,7 +98,8 @@ function App() {
 
   const handleAddToWatchlist = async (symbol: string) => {
     if (!selectedAccount) {
-      alert('Please select an account first');
+      setWsNotification({ type: 'error', message: '⚠️ Select an MT5 account first (link one above, then click it in the Accounts panel)' });
+      setTimeout(() => setWsNotification(null), 5000);
       return;
     }
 
@@ -226,12 +227,15 @@ function App() {
         {/* Main Dashboard */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           <div className="lg:col-span-2">
+            {/* Tickers — always visible, no account needed */}
+            <TickersPanel 
+              onAddToWatchlist={handleAddToWatchlist}
+              watchlistSymbols={watchlistSymbols}
+            />
+
+            {/* Watchlist & live positions — need a selected account */}
             {selectedAccount ? (
               <>
-                <TickersPanel 
-                  onAddToWatchlist={handleAddToWatchlist}
-                  watchlistSymbols={watchlistSymbols}
-                />
                 <div className="mt-4">
                   <WatchlistManager 
                     accountId={selectedAccount.login}
@@ -253,19 +257,22 @@ function App() {
                     }}
                   />
                 </div>
-                <div className="mt-4">
-                  <RenkoChart 
-                    symbol={selectedSymbol || 'EURUSD'} 
-                    accountId={selectedAccount.login}
-                    onAddToWatchlist={handleAddToWatchlist}
-                  />
-                </div>
               </>
             ) : (
-              <div className="bg-slate-800 p-8 rounded-lg text-center text-slate-400">
-                Select an account to start trading
+              <div className="mt-4 bg-slate-800 p-6 rounded-lg text-center text-slate-400 border border-slate-700">
+                <p className="text-lg mb-1">📋 No account selected</p>
+                <p className="text-sm">Link an MT5 account above, then select it to manage your watchlist and view live positions.</p>
               </div>
             )}
+
+            {/* Renko Chart — always visible, no account needed */}
+            <div className="mt-4">
+              <RenkoChart 
+                symbol={selectedSymbol || 'XAUUSD'} 
+                accountId={selectedAccount?.login}
+                onAddToWatchlist={handleAddToWatchlist}
+              />
+            </div>
           </div>
 
           <div className="space-y-4">

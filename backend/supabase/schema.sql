@@ -178,15 +178,27 @@ CREATE TABLE IF NOT EXISTS available_symbols (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
--- Pre-populate some common symbols
+-- Pre-populate some common symbols (XM broker uses GOLD instead of XAUUSD)
 INSERT INTO available_symbols (symbol, description, pip_value) VALUES
     ('XAUUSD', 'Gold vs USD', 0.01),
+    ('GOLD', 'Gold vs USD (XM)', 0.01),
     ('EURUSD', 'EUR vs USD', 0.0001),
     ('GBPUSD', 'GBP vs USD', 0.0001),
     ('USDJPY', 'USD vs JPY', 0.01),
     ('AUDUSD', 'AUD vs USD', 0.0001),
     ('NZDUSD', 'NZD vs USD', 0.0001),
-    ('USDCAD', 'USD vs CAD', 0.0001)
+    ('USDCAD', 'USD vs CAD', 0.0001),
+    ('USDCHF', 'USD vs CHF', 0.0001),
+    ('EURGBP', 'EUR vs GBP', 0.0001),
+    ('EURJPY', 'EUR vs JPY', 0.01),
+    ('GBPJPY', 'GBP vs JPY', 0.01),
+    ('BTCUSD', 'Bitcoin vs USD', 1.0),
+    ('ETHUSD', 'Ethereum vs USD', 0.1),
+    ('XAGUSD', 'Silver vs USD', 0.001),
+    ('SILVER', 'Silver vs USD (XM)', 0.001),
+    ('US30', 'Dow Jones Index', 1.0),
+    ('US500', 'S&P 500 Index', 0.1),
+    ('NASDAQ', 'NASDAQ Index', 0.1)
 ON CONFLICT (symbol) DO NOTHING;
 
 CREATE INDEX idx_available_symbols_active ON available_symbols(is_active);

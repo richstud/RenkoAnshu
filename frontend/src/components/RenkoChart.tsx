@@ -121,7 +121,11 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
         if (!active) return;
         try {
           const data = JSON.parse(event.data);
-          if (data.error) { setError(data.error); return; }
+          if (data.error) {
+            setError(`⚠️ ${data.error}`);
+            setLoading(false); // Stop spinner — show error instead
+            return;
+          }
 
           if (data.bid) { bidRef.current = data.bid; setBid(data.bid); }
           if (data.ask) { askRef.current = data.ask; setAsk(data.ask); }
@@ -528,11 +532,7 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
   }, [symbol, loading]); // Re-attach on symbol change and after loading completes
 
   if (error) {
-    return (
-      <div className="bg-slate-900 p-4 rounded-lg border border-red-600">
-        <p className="text-red-400">❌ Chart Error: {error}</p>
-      </div>
-    );
+    // Don't return early — fall through to show controls with error in canvas area
   }
 
   return (
@@ -667,11 +667,21 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
 
       {/* Chart */}
       <div>
-        {loading ? (
+        {loading || error ? (
           <div className="w-full h-96 flex items-center justify-center bg-slate-950">
             <div className="text-center">
-              <div className="text-slate-300 text-lg mb-2">⏳ Loading chart data...</div>
-              <p className="text-slate-500 text-sm">Fetching from MT5</p>
+              {error ? (
+                <>
+                  <div className="text-red-400 text-lg mb-2">❌ {error}</div>
+                  <p className="text-slate-400 text-sm">Is MetaTrader 5 running on the VPS?</p>
+                  <p className="text-slate-500 text-xs mt-1">Reconnecting automatically...</p>
+                </>
+              ) : (
+                <>
+                  <div className="text-slate-300 text-lg mb-2">⏳ Connecting to MT5...</div>
+                  <p className="text-slate-500 text-sm">Waiting for live data from MetaTrader 5</p>
+                </>
+              )}
             </div>
           </div>
         ) : (
