@@ -375,7 +375,8 @@ async def stream_renko_chart(websocket: WebSocket, symbol: str, brick_size: floa
                 "USDJPY": 0.05,
                 "GOLD": 5.0,
                 "XAUUSD": 5.0,
-                "BTCUSD": 1.0,
+                "BTCUSD": 100.0,
+                "ETHUSD": 10.0,
             }
             brick_size = brick_sizes.get(symbol, 0.01)
         
@@ -388,16 +389,58 @@ async def stream_renko_chart(websocket: WebSocket, symbol: str, brick_size: floa
             await websocket.close()
             return
         
-        # Initialize Renko engine
+        # Initialize Renko engine (fresh per connection so brick history is rebuilt)
         engine_key = f"{symbol}_{brick_size}"
-        if engine_key not in renko_engines:
-            renko_engines[engine_key] = RenkoEngine(brick_size)
-            strategy_engines[engine_key] = StrategyEngine(renko_engines[engine_key])
+        renko_engines[engine_key] = RenkoEngine(brick_size)
+        strategy_engines[engine_key] = StrategyEngine(renko_engines[engine_key])
         
         renko = renko_engines[engine_key]
         strategy = strategy_engines[engine_key]
         
         logger.info(f"🔌 WebSocket stream connected for {symbol} - brick_size: {brick_size}")
+
+        # --- Initial bulk-load: feed 500 historical candles to build brick history ---
+        def _bulk_load():
+            return mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M1, 0, 500)
+
+        loop = asyncio.get_event_loop()
+        init_rates = await asyncio.wait_for(loop.run_in_executor(None, _bulk_load), timeout=10.0)
+
+        if init_rates is not None and len(init_rates) > 0:
+            for rate in init_rates:
+                renko.feed_tick(float(rate['close']), _mt5_ts_to_utc(int(rate['time'])))
+            logger.info(f"📊 Built {len(renko.history(1000))} Renko bricks from {len(init_rates)} candles for {symbol}")
+        else:
+            logger.warning(f"⚠️ No historical rates for {symbol} — chart will build in real-time")
+
+        # Send initial state immediately (even if bricks=0, so frontend stops loading)
+        tick = mt5.symbol_info_tick(symbol)
+        bid = float(tick.bid) if tick else None
+        ask = float(tick.ask) if tick else None
+        current_price = (bid or 0.0)
+        all_bricks = renko.history(100)
+        chart_data = []
+        prev_color = None
+        for i, brick in enumerate(all_bricks):
+            is_reversal = (prev_color is not None and brick.color != prev_color)
+            chart_data.append({
+                "index": i, "open": float(brick.open_price), "close": float(brick.close_price),
+                "high": float(brick.high), "low": float(brick.low), "color": brick.color,
+                "signal": ("BUY" if brick.color == "green" else "SELL") if is_reversal else None,
+                "time": brick.timestamp,
+            })
+            prev_color = brick.color
+
+        init_msg = {
+            "symbol": symbol, "brick_size": brick_size,
+            "bricks": chart_data, "total_bricks": len(all_bricks),
+            "current_price": current_price, "current_direction": renko.direction(),
+            "signal": None, "timestamp": datetime.utcnow().isoformat(),
+            "data_source": "MT5_INITIAL_LOAD",
+        }
+        if bid: init_msg["bid"] = bid
+        if ask: init_msg["ask"] = ask
+        await websocket.send_json(init_msg)
         
         # Stream real-time updates
         last_candle_time = None
@@ -420,9 +463,11 @@ async def stream_renko_chart(websocket: WebSocket, symbol: str, brick_size: floa
                 if latest_time != last_candle_time:
                     last_candle_time = latest_time
                     
-                    # Feed all recent prices (convert MT5 broker local time to UTC)
-                    for rate in rates[-10:]:
-                        renko.feed_tick(rate['close'], _mt5_ts_to_utc(int(rate['time'])))
+                    # Feed only the newest candle (bulk load already fed the rest)
+                    renko.feed_tick(float(rates[-1]['close']), _mt5_ts_to_utc(int(rates[-1]['time'])))
+                    # Also feed current tick price for sub-candle accuracy
+                    if tick_price:
+                        renko.feed_tick(tick_price, int(time.time()))
                     
                     # Get brick history (last 100)
                     all_bricks = renko.history(100)
@@ -439,12 +484,12 @@ async def stream_renko_chart(websocket: WebSocket, symbol: str, brick_size: floa
                             "low": float(brick.low),
                             "color": brick.color,
                             "signal": ("BUY" if brick.color == "green" else "SELL") if is_reversal else None,
+                            "time": brick.timestamp,
                         })
                         prev_color = brick.color
 
                     signal = None
                     if len(all_bricks) > 0:
-                        # Signal is based on the most recent brick color
                         last_brick = all_bricks[-1]
                         signal = {"type": "buy" if last_brick.color == "green" else "sell"}
 
@@ -465,9 +510,14 @@ async def stream_renko_chart(websocket: WebSocket, symbol: str, brick_size: floa
                     skip_count = 0
                 else:
                     skip_count += 1
-                    # Send tick update every 5 loops (every 500ms)
-                    if skip_count >= 5:
+                    # Send tick update every 3 loops (every 300ms) with bid/ask
+                    if skip_count >= 3:
                         skip_count = 0
+                        # Feed tick price to renko in real time
+                        if tick_price:
+                            new_brick = renko.feed_tick(tick_price, int(time.time()))
+                        else:
+                            new_brick = None
                         msg = {
                             "symbol": symbol,
                             "current_price": current_price,
@@ -475,6 +525,25 @@ async def stream_renko_chart(websocket: WebSocket, symbol: str, brick_size: floa
                         }
                         if bid: msg["bid"] = bid
                         if ask: msg["ask"] = ask
+                        # If tick formed a new brick, send full brick update
+                        if new_brick is not None:
+                            all_bricks = renko.history(100)
+                            chart_data = []
+                            prev_color = None
+                            for i, brick in enumerate(all_bricks):
+                                is_reversal = (prev_color is not None and brick.color != prev_color)
+                                chart_data.append({
+                                    "index": i, "open": float(brick.open_price),
+                                    "close": float(brick.close_price), "high": float(brick.high),
+                                    "low": float(brick.low), "color": brick.color,
+                                    "signal": ("BUY" if brick.color == "green" else "SELL") if is_reversal else None,
+                                    "time": brick.timestamp,
+                                })
+                                prev_color = brick.color
+                            msg["bricks"] = chart_data
+                            msg["total_bricks"] = len(all_bricks)
+                            msg["current_direction"] = renko.direction()
+                            msg["data_source"] = "MT5_TICK_BRICK"
                         await websocket.send_json(msg)
 
             # 100ms loop — 10 updates per second

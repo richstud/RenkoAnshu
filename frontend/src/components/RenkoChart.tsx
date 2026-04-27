@@ -123,6 +123,9 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
           const data = JSON.parse(event.data);
           if (data.error) { setError(data.error); setLoading(false); return; }
 
+          // Stop loading on ANY valid message from server
+          setLoading(false);
+
           if (data.bid) { bidRef.current = data.bid; setBid(data.bid); }
           if (data.ask) { askRef.current = data.ask; setAsk(data.ask); }
           if (data.current_price) { priceRef.current = data.current_price; setCurrentPrice(data.current_price); }
@@ -130,7 +133,6 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
           if (data.bricks && data.bricks.length > 0) {
             bricksRef.current = data.bricks;
             setBricks(data.bricks);
-            setLoading(false);
             setCalculating(false);
             setChartData({
               symbol: data.symbol || symbol,
@@ -667,8 +669,8 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
         {loading ? (
           <div className="w-full h-96 flex items-center justify-center bg-slate-950">
             <div className="text-center">
-              <div className="text-slate-300 text-lg mb-2">⏳ Loading chart data...</div>
-              <p className="text-slate-500 text-sm">Fetching from MT5</p>
+              <div className="text-slate-300 text-lg mb-2">⏳ Connecting to MT5...</div>
+              <p className="text-slate-500 text-sm">Loading {symbol} historical data</p>
             </div>
           </div>
         ) : error ? (
@@ -677,6 +679,14 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
               <p className="text-red-400 text-lg mb-2">❌ {error}</p>
               <p className="text-slate-500 text-sm">Make sure MT5 is running on the server</p>
               <p className="text-slate-600 text-xs mt-2">Attempting to reconnect...</p>
+            </div>
+          </div>
+        ) : bricks.length === 0 ? (
+          <div className="w-full h-96 flex items-center justify-center bg-slate-950">
+            <div className="text-center">
+              <div className="text-emerald-400 text-lg mb-2">✅ Connected to MT5</div>
+              <p className="text-slate-400 text-sm">⏳ Building Renko bricks from live data...</p>
+              <p className="text-slate-600 text-xs mt-2">Brick size: {brickSize} — waiting for price to move</p>
             </div>
           </div>
         ) : (
