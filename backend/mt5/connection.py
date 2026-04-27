@@ -155,7 +155,12 @@ class MT5Manager:
             logger.info("🔧 Initializing MT5 library (global)...")
             for init_attempt in range(max_retries):
                 try:
-                    if not mt5.initialize(path=settings.MT5_PATH, timeout=10000):
+                    # If MT5_PATH is set, launch that terminal; otherwise attach to the already-running MT5.
+                    # Passing path="" launches a NEW terminal (which resets AutoTrading to OFF).
+                    init_kwargs = {"timeout": 10000}
+                    if settings.MT5_PATH:
+                        init_kwargs["path"] = settings.MT5_PATH
+                    if not mt5.initialize(**init_kwargs):
                         error_info = mt5.last_error()
                         logger.warning(f"MT5 initialize attempt {init_attempt + 1} failed: {error_info}")
                         
