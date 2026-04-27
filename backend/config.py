@@ -5,6 +5,7 @@ class Settings(BaseSettings):
     # Supabase
     SUPABASE_URL: str
     SUPABASE_KEY: str
+    SUPABASE_SERVICE_KEY: str = ""  # Service role key — bypasses RLS
     SUPABASE_DB_SCHEMA: str = "public"
     
     # MT5
@@ -26,6 +27,6 @@ class Settings(BaseSettings):
     API_HOST: str = "0.0.0.0"
     API_PORT: int = 8000
 
-    model_config = ConfigDict(env_file=".env")
+    model_config = ConfigDict(env_file=".env", extra="ignore")
 
 settings = Settings()

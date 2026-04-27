@@ -193,16 +193,20 @@ CREATE INDEX idx_available_symbols_active ON available_symbols(is_active);
 
 
 -- ===================================
--- RLS (Row Level Security) - Optional
+-- RLS (Row Level Security)
 -- ===================================
--- You can enable RLS if using Supabase auth, for now keeping it simple
+-- RLS is DISABLED for all tables because the backend uses a service role key
+-- which bypasses RLS anyway. Disabling it avoids accidental 401 errors if
+-- the anon key is used during development.
 
--- Enable RLS on all tables (uncomment if using Supabase auth)
--- ALTER TABLE accounts ENABLE ROW LEVEL SECURITY;
--- ALTER TABLE watchlist ENABLE ROW LEVEL SECURITY;
--- ALTER TABLE trades ENABLE ROW LEVEL SECURITY;
--- ALTER TABLE logs ENABLE ROW LEVEL SECURITY;
--- ALTER TABLE bot_control ENABLE ROW LEVEL SECURITY;
+ALTER TABLE accounts DISABLE ROW LEVEL SECURITY;
+ALTER TABLE watchlist DISABLE ROW LEVEL SECURITY;
+ALTER TABLE trades DISABLE ROW LEVEL SECURITY;
+ALTER TABLE logs DISABLE ROW LEVEL SECURITY;
+ALTER TABLE bot_control DISABLE ROW LEVEL SECURITY;
+ALTER TABLE settings DISABLE ROW LEVEL SECURITY;
+ALTER TABLE price_ticks DISABLE ROW LEVEL SECURITY;
+ALTER TABLE available_symbols DISABLE ROW LEVEL SECURITY;
 
 
 -- ===================================
