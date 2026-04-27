@@ -26,7 +26,7 @@ function App() {
   const [trades, setTrades] = useState<Trade[]>([]);
   const [availableSymbols, setAvailableSymbols] = useState<string[]>([]);
   const [symbolData, setSymbolData] = useState<any[]>([]);
-  const [selectedSymbol, setSelectedSymbol] = useState<string>('XAUUSD');
+  const [selectedSymbol, setSelectedSymbol] = useState<string>('GOLD');
   const [watchlistSymbols, setWatchlistSymbols] = useState<string[]>([]);
   const [watchlistRefresh, setWatchlistRefresh] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -166,7 +166,7 @@ function App() {
         <div className="flex justify-between items-start mb-3">
           <div>
             <h1 className="text-4xl font-bold mb-2">🟡 Renko Reversal Gold Bot</h1>
-            <p className="text-slate-400">Automated XAUUSD trading powered by MetaTrader 5</p>
+            <p className="text-slate-400">Automated Gold (GOLD) trading powered by MetaTrader 5</p>
           </div>
           <div className="flex flex-col items-end gap-1">
             <button
@@ -258,7 +258,7 @@ function App() {
             )}
             <div className="mt-4">
               <RenkoChart 
-                symbol={selectedSymbol || 'XAUUSD'} 
+                symbol={selectedSymbol || 'GOLD'} 
                 accountId={selectedAccount?.login}
                 onAddToWatchlist={handleAddToWatchlist}
               />
@@ -269,7 +269,7 @@ function App() {
             {selectedAccount && (
               <TradeExecutor 
                 accountId={selectedAccount.login}
-                availableSymbols={availableSymbols.length > 0 ? availableSymbols : ['XAUUSD']}
+                availableSymbols={availableSymbols.length > 0 ? availableSymbols : ['GOLD']}
                 symbolData={symbolData}
                 onSymbolSelected={setSelectedSymbol}
               />

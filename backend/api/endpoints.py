@@ -108,16 +108,15 @@ async def get_all_mt5_symbols(search: str = Query(default='', description="Searc
 
 
 _DEFAULT_SYMBOLS = [
-    {"id": 1, "symbol": "XAUUSD", "description": "Gold vs USD", "pip_value": 0.01, "is_active": True},
-    {"id": 2, "symbol": "GOLD", "description": "Gold vs USD (XM)", "pip_value": 0.01, "is_active": True},
-    {"id": 3, "symbol": "EURUSD", "description": "EUR vs USD", "pip_value": 0.0001, "is_active": True},
-    {"id": 4, "symbol": "GBPUSD", "description": "GBP vs USD", "pip_value": 0.0001, "is_active": True},
-    {"id": 5, "symbol": "USDJPY", "description": "USD vs JPY", "pip_value": 0.01, "is_active": True},
-    {"id": 6, "symbol": "AUDUSD", "description": "AUD vs USD", "pip_value": 0.0001, "is_active": True},
-    {"id": 7, "symbol": "USDCAD", "description": "USD vs CAD", "pip_value": 0.0001, "is_active": True},
-    {"id": 8, "symbol": "USDCHF", "description": "USD vs CHF", "pip_value": 0.0001, "is_active": True},
-    {"id": 9, "symbol": "BTCUSD", "description": "Bitcoin vs USD", "pip_value": 1.0, "is_active": True},
-    {"id": 10, "symbol": "ETHUSD", "description": "Ethereum vs USD", "pip_value": 0.1, "is_active": True},
+    {"id": 1, "symbol": "GOLD", "description": "Gold vs USD (XM)", "pip_value": 0.01, "is_active": True},
+    {"id": 2, "symbol": "EURUSD", "description": "EUR vs USD", "pip_value": 0.0001, "is_active": True},
+    {"id": 3, "symbol": "GBPUSD", "description": "GBP vs USD", "pip_value": 0.0001, "is_active": True},
+    {"id": 4, "symbol": "USDJPY", "description": "USD vs JPY", "pip_value": 0.01, "is_active": True},
+    {"id": 5, "symbol": "AUDUSD", "description": "AUD vs USD", "pip_value": 0.0001, "is_active": True},
+    {"id": 6, "symbol": "USDCAD", "description": "USD vs CAD", "pip_value": 0.0001, "is_active": True},
+    {"id": 7, "symbol": "USDCHF", "description": "USD vs CHF", "pip_value": 0.0001, "is_active": True},
+    {"id": 8, "symbol": "BTCUSD", "description": "Bitcoin vs USD", "pip_value": 1.0, "is_active": True},
+    {"id": 9, "symbol": "ETHUSD", "description": "Ethereum vs USD", "pip_value": 0.1, "is_active": True},
 ]
 
 

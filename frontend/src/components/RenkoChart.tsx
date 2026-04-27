@@ -19,7 +19,7 @@ interface RenkoChartProps {
 }
 
 export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBrickSize, accountId, onAddToWatchlist }: RenkoChartProps) {
-  const [symbol, setSymbol] = useState<string>(initialSymbol || 'EURUSD');
+  const [symbol, setSymbol] = useState<string>(initialSymbol || 'GOLD');
   // Use symbol-aware default brick size: Gold/XAUUSD → 5.0, JPY pairs → 0.05, everything else → 0.005
   const getDefaultBrickSize = (sym: string) => {
     const s = sym.toUpperCase();
@@ -28,7 +28,7 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
     if (s.includes('JPY')) return 0.05;
     return 0.005;
   };
-  const [brickSize, setBrickSize] = useState<number>(initialBrickSize || getDefaultBrickSize(initialSymbol || 'EURUSD'));
+  const [brickSize, setBrickSize] = useState<number>(initialBrickSize || getDefaultBrickSize(initialSymbol || 'GOLD'));
   const [timeframe, setTimeframe] = useState<number>(1); // 1 or 5 minutes
   const [bricks, setBricks] = useState<RenkoBrick[]>([]);
   const [currentPrice, setCurrentPrice] = useState<number>(0);
