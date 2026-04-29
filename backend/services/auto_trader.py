@@ -259,56 +259,55 @@ class AutoTrader:
         return signals
 
     def _check_signal_sync(self, symbol_key: str, config: dict, account_id: int) -> Optional[dict]:
-        """Pure sync: check Renko signal for one symbol. MT5 must already be switched to account."""
+        """Pure sync: check Renko signal using live tick price for instant brick detection.
+        MT5 must already be switched to the correct account.
+        """
         symbol = config['symbol']
         brick_size = config.get('brick_size', 1.0)
 
-        rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M1, 0, 100)
-        if rates is None or len(rates) == 0:
-            logger.debug(f"⏳ No rate data yet for {symbol}")
-            return None
-
-        # Include account_id so each account has its own independent Renko engine.
-        # Without this, accounts sharing the same symbol+brick_size share one engine,
-        # so only the first account to process each candle fires a signal.
         engine_key = f"{account_id}_{symbol}_{brick_size}"
         if engine_key not in self.renko_engines:
             logger.info(f"🏗️ Creating Renko engine for {symbol} with brick_size={brick_size} (from watchlist)")
             self.renko_engines[engine_key] = RenkoEngine(brick_size)
             self.strategy_engines[engine_key] = StrategyEngine(self.renko_engines[engine_key])
 
+            # Seed engine with historical M1 candles so the first brick level is realistic
+            rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M1, 0, 200)
+            if rates is not None and len(rates) > 0:
+                for rate in sorted(rates, key=lambda r: int(r['time'])):
+                    self.renko_engines[engine_key].feed_tick(rate['close'])
+                brick_count = len(self.renko_engines[engine_key].bricks)
+                logger.info(f"📊 [{symbol}] Seeded {len(rates)} candles → {brick_count} bricks (brick_size={brick_size})")
+            else:
+                logger.warning(f"⚠️ [{symbol}] No historical data for engine seed")
+
         renko = self.renko_engines[engine_key]
 
-        rates_sorted = sorted(rates, key=lambda r: int(r['time']))
-        last_fed_time = self.last_candle_times.get(engine_key, 0)
-        if last_fed_time == 0:
-            new_rates = rates_sorted
-            logger.info(f"📊 Initializing Renko engine for {symbol} (brick_size={brick_size}) with {len(new_rates)} historical candles")
-        else:
-            new_rates = [r for r in rates_sorted if int(r['time']) > last_fed_time]
-
-        if new_rates:
-            for rate in new_rates:
-                renko.feed_tick(rate['close'])
-            self.last_candle_times[engine_key] = max(int(r['time']) for r in new_rates)
-            logger.debug(f"Fed {len(new_rates)} new candle(s) to {symbol}")
+        # Feed current live tick (mid price) — detects bricks the instant price crosses a boundary,
+        # not just once per minute when an M1 candle closes.
+        tick = mt5.symbol_info_tick(symbol)
+        if tick is None:
+            logger.debug(f"⏳ No tick data for {symbol}")
+            return None
+        live_price = (tick.bid + tick.ask) / 2.0
+        renko.feed_tick(live_price)
 
         all_bricks = renko.history(10)
         if len(all_bricks) == 0:
-            logger.info(f"⏳ [{symbol}] No bricks yet — brick_size={brick_size}, need {brick_size} price movement")
+            logger.info(f"⏳ [{symbol}] No bricks yet — brick_size={brick_size}, live={live_price:.2f}")
             return None
 
         current_color = all_bricks[-1].color
         last_color = self.last_brick_state.get(symbol_key)
 
-        # Periodic heartbeat log every 60 evaluations (~60s) so we know the bot is alive
+        # Heartbeat every 60 evaluations (~60s)
         eval_count_key = f"_eval_count_{symbol_key}"
         self._eval_counts = getattr(self, '_eval_counts', {})
         self._eval_counts[eval_count_key] = self._eval_counts.get(eval_count_key, 0) + 1
         if self._eval_counts[eval_count_key] % 60 == 0:
             brick_colors = [b.color for b in all_bricks[-5:]]
             logger.info(
-                f"💓 [{symbol}] HEARTBEAT — brick_size={brick_size}, "
+                f"💓 [{symbol}] HEARTBEAT — brick_size={brick_size}, live={live_price:.2f}, "
                 f"last 5 bricks={brick_colors}, tracked_state={last_color or 'none'}"
             )
 

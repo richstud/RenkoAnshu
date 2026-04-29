@@ -21,6 +21,8 @@ class WatchlistItem(BaseModel):
     algo_enabled: bool = False
     stop_loss_pips: float = 50
     take_profit_pips: float = 100
+    trailing_stop_pips: float = 30
+    use_trailing_stop: bool = False
 
 
 @router.get("/")
@@ -104,6 +106,49 @@ async def add_to_watchlist(item: WatchlistItem, account_id: int = Query(...)):
     
     except Exception as e:
         logger.error(f"Error adding to watchlist: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/{symbol}")
+async def update_watchlist_item(symbol: str, item: WatchlistItem, account_id: int = Query(...)):
+    """
+    Update all settings for a watchlist symbol (called from UI Edit form).
+    Changes take effect immediately in the auto-trader.
+    """
+    try:
+        response = supabase.table('watchlist').update({
+            'brick_size': item.brick_size,
+            'lot_size': item.lot_size,
+            'algo_enabled': item.algo_enabled,
+            'stop_loss_pips': item.stop_loss_pips,
+            'take_profit_pips': item.take_profit_pips,
+            'trailing_stop_pips': item.trailing_stop_pips,
+            'use_trailing_stop': item.use_trailing_stop,
+            'updated_at': 'NOW()'
+        }).eq('account_id', account_id).eq('symbol', symbol).execute()
+
+        logger.info(f"Updated watchlist for {symbol} (account {account_id}): brick_size={item.brick_size}, lot={item.lot_size}")
+
+        # Immediately reload auto-trader so new brick_size takes effect without waiting 30s
+        try:
+            from backend.services.auto_trader import auto_trader as _at
+            if _at:
+                import asyncio
+                asyncio.create_task(_at.load_watchlist())
+                logger.info(f"🔄 Auto-trader reload triggered for {symbol} brick_size={item.brick_size}")
+        except Exception as e:
+            logger.warning(f"Auto-trader reload skipped: {e}")
+
+        return {
+            "status": "success",
+            "symbol": symbol,
+            "brick_size": item.brick_size,
+            "lot_size": item.lot_size,
+            "algo_enabled": item.algo_enabled,
+            "message": f"Watchlist updated. Auto-trader reloaded with brick_size={item.brick_size}"
+        }
+    except Exception as e:
+        logger.error(f"Error updating watchlist item {symbol}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
