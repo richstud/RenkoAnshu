@@ -309,10 +309,16 @@ class AutoTrader:
                 self.last_brick_state[symbol_key] = current_color
                 return None
 
-        self.last_brick_state[symbol_key] = current_color
-
+        # IMPORTANT: Only update state when color has changed.
+        # Do NOT update on every tick — if we update before the trade executes
+        # and the trade fails, the reversal signal is permanently lost.
         if last_color == current_color:
             return None
+
+        # Color changed → signal to fire. Update state here so we don't
+        # double-fire on the same reversal. If trade execution fails below,
+        # the position stays open but we won't hammer the broker with retries.
+        self.last_brick_state[symbol_key] = current_color
 
         signal = 'BUY' if current_color == 'green' else 'SELL'
         logger.info(f"📊 Signal: {symbol} on account {account_id}: {last_color} → {current_color} → {signal}")
