@@ -51,6 +51,40 @@ class AutoTrader:
         except Exception as e:
             logger.error(f"❌ Failed to initialize Auto-Trader: {e}")
     
+    def _resolve_and_select_symbol(self, symbol: str) -> str:
+        """Ensure symbol is visible in MT5 MarketWatch and resolve broker alias if needed.
+        
+        MT5 returns None from symbol_info() for symbols not in MarketWatch.
+        symbol_select(sym, True) adds it. We also try known aliases (e.g. BTCUSD → BTCUSD.).
+        """
+        # Try exact name first — add to MarketWatch if found
+        if mt5.symbol_select(symbol, True):
+            info = mt5.symbol_info(symbol)
+            if info is not None:
+                return symbol
+
+        # Try common broker suffixes used by XM and others
+        for suffix in [".", "+", "m", "micro"]:
+            candidate = symbol + suffix
+            if mt5.symbol_select(candidate, True):
+                info = mt5.symbol_info(candidate)
+                if info is not None:
+                    logger.info(f"🔀 Symbol {symbol} resolved to broker alias: {candidate}")
+                    return candidate
+
+        # Fuzzy search: scan all available symbols
+        all_symbols = mt5.symbols_get()
+        if all_symbols:
+            upper = symbol.upper()
+            for s in all_symbols:
+                if s.name.upper().startswith(upper):
+                    mt5.symbol_select(s.name, True)
+                    logger.info(f"🔀 Symbol {symbol} fuzzy-resolved to: {s.name}")
+                    return s.name
+
+        logger.warning(f"⚠️ Could not resolve/select symbol {symbol} — using as-is")
+        return symbol
+
     def calculate_lot_size(self, balance: float) -> float:
         """Calculate lot size based on account balance
         
@@ -340,6 +374,9 @@ class AutoTrader:
         free_margin = account_info.margin_free
         manual_lot_size = config.get('lot_size')
         lot_size = manual_lot_size if (manual_lot_size and manual_lot_size > 0) else self.calculate_lot_size(balance)
+
+        # Ensure symbol is in MarketWatch and resolve broker-specific name BEFORE any MT5 symbol calls
+        symbol = self._resolve_and_select_symbol(symbol)
 
         # Guard: check margin required for the requested lot size.
         # order_send returns None (not an error object) when margin is insufficient,
