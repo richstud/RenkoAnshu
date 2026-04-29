@@ -54,17 +54,17 @@ async def run_worker():
 async def startup_event():
     """Initialize MT5 connection and load accounts on startup"""
     try:
-        # Load only ACTIVE accounts from Supabase DB into mt5_manager.sessions
+        # Load ACTIVE and PENDING accounts from Supabase DB into mt5_manager.sessions
         try:
-            response = supabase_client.table("accounts").select("*").eq("status", "active").execute()
+            response = supabase_client.table("accounts").select("*").in_("status", ["active", "pending"]).execute()
             if response.data:
                 for account in response.data:
                     if account["login"] not in mt5_manager.sessions:
                         password = account.get("password", settings.MT5_PASSWORD)
                         server = account.get("server", settings.MT5_SERVER)
                         mt5_manager.add_account(account["login"], password, server)
-                        logger.info(f"Loaded account {account['login']} from database")
-                logger.info(f"Loaded {len(response.data)} active accounts from database")
+                        logger.info(f"Loaded account {account['login']} (status={account.get('status')}) from database")
+                logger.info(f"Loaded {len(response.data)} accounts from database")
         except Exception as e:
             logger.warning(f"Could not load accounts from Supabase: {e}")
 

@@ -198,6 +198,17 @@ class MT5Manager:
                 session.connect(max_retries=max_retries)
                 successful_connections += 1
                 logger.info(f"✅ Account {login} connected successfully")
+                # Promote pending accounts to active now that connection succeeded
+                try:
+                    from backend.supabase.client import supabase_client
+                    info = mt5.account_info()
+                    balance = float(info.balance) if info else 0.0
+                    supabase_client.table('accounts').update({
+                        'status': 'active',
+                        'balance': balance,
+                    }).eq('login', login).eq('status', 'pending').execute()
+                except Exception as db_err:
+                    logger.warning(f"Could not promote account {login} from pending to active: {db_err}")
             except Exception as exc:
                 logger.error(f"❌ Failed to connect account {login}: {exc}")
                 failed_connections.append((login, str(exc)))

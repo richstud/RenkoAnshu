@@ -42,6 +42,7 @@ async def connect_account(request: ConnectAccountRequest):
             supabase_client.table('accounts').update({
                 'server': request.server,
                 'status': 'pending',
+                'password': request.password,
             }).eq('login', request.login).execute()
             logger.info(f"✅ Account {request.login} updated in database (pending MT5 verify)")
         else:
@@ -50,6 +51,7 @@ async def connect_account(request: ConnectAccountRequest):
                 'server': request.server,
                 'status': 'pending',
                 'balance': 0,
+                'password': request.password,
             }).execute()
             logger.info(f"✅ Account {request.login} saved to database (pending MT5 verify)")
         
