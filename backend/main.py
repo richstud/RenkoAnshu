@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 from typing import Optional
 
 from fastapi import FastAPI, WebSocket, HTTPException
@@ -192,10 +193,15 @@ def health():
         if session.connected:
             mt5_connected = True
             connected_accounts.append(login)
-    
+
+    from backend.services.auto_trader import auto_trader as _auto_trader
+    auto_trader_running = _auto_trader.is_running if _auto_trader else False
+    auto_trader_symbols = list(_auto_trader.enabled_symbols.keys()) if _auto_trader else []
+
     return {
         "status": "ok",
-        "active": bot_worker.active,
+        "active": auto_trader_running,
+        "auto_trader_symbols": auto_trader_symbols,
         "mt5_connected": mt5_connected,
         "total_accounts": len(mt5_manager.sessions),
         "connected_accounts": connected_accounts,
@@ -314,20 +320,28 @@ async def websocket_live_data(websocket: WebSocket):
             loop = _aio.get_event_loop()
             await loop.run_in_executor(None, _select_symbols)
 
+        _mt5_ok = True
+        _mt5_retry_at = 0.0
+
         while True:
             update: dict = {}
+            now = time.time()
 
-            # Switch to the requested account if specified
+            # Switch to the requested account — but only retry MT5 every 5s when it's down
             if account_id:
                 session = mt5_manager.get_session(int(account_id))
-                if session:
+                if session and (_mt5_ok or now >= _mt5_retry_at):
                     try:
                         session.switch_to()
+                        _mt5_ok = True
                     except Exception as sw_err:
-                        logger.warning(f"ws/live switch to {account_id} failed: {sw_err}")
+                        if _mt5_ok:  # only log on first failure, not every tick
+                            logger.warning(f"ws/live switch to {account_id} failed: {sw_err}")
+                        _mt5_ok = False
+                        _mt5_retry_at = now + 5.0  # retry in 5 seconds
 
             # Account balance/equity for the selected account
-            if account_id:
+            if account_id and _mt5_ok:
                 try:
                     acct_info = mt5_module.account_info()
                     if acct_info is not None:

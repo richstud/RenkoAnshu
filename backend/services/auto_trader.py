@@ -273,7 +273,7 @@ class AutoTrader:
         # so only the first account to process each candle fires a signal.
         engine_key = f"{account_id}_{symbol}_{brick_size}"
         if engine_key not in self.renko_engines:
-            logger.info(f"🏗️ Creating Renko engine for {symbol} with brick_size={brick_size}")
+            logger.info(f"🏗️ Creating Renko engine for {symbol} with brick_size={brick_size} (from watchlist)")
             self.renko_engines[engine_key] = RenkoEngine(brick_size)
             self.strategy_engines[engine_key] = StrategyEngine(self.renko_engines[engine_key])
 
@@ -283,7 +283,7 @@ class AutoTrader:
         last_fed_time = self.last_candle_times.get(engine_key, 0)
         if last_fed_time == 0:
             new_rates = rates_sorted
-            logger.info(f"📊 Initializing Renko engine for {symbol} with {len(new_rates)} historical candles")
+            logger.info(f"📊 Initializing Renko engine for {symbol} (brick_size={brick_size}) with {len(new_rates)} historical candles")
         else:
             new_rates = [r for r in rates_sorted if int(r['time']) > last_fed_time]
 
@@ -295,33 +295,49 @@ class AutoTrader:
 
         all_bricks = renko.history(10)
         if len(all_bricks) == 0:
-            logger.info(f"⏳ [{symbol}] No bricks generated yet (need more price movement with brick_size={brick_size})")
+            logger.info(f"⏳ [{symbol}] No bricks yet — brick_size={brick_size}, need {brick_size} price movement")
             return None
 
         current_color = all_bricks[-1].color
         last_color = self.last_brick_state.get(symbol_key)
 
+        # Periodic heartbeat log every 60 evaluations (~60s) so we know the bot is alive
+        eval_count_key = f"_eval_count_{symbol_key}"
+        self._eval_counts = getattr(self, '_eval_counts', {})
+        self._eval_counts[eval_count_key] = self._eval_counts.get(eval_count_key, 0) + 1
+        if self._eval_counts[eval_count_key] % 60 == 0:
+            brick_colors = [b.color for b in all_bricks[-5:]]
+            logger.info(
+                f"💓 [{symbol}] HEARTBEAT — brick_size={brick_size}, "
+                f"last 5 bricks={brick_colors}, tracked_state={last_color or 'none'}"
+            )
+
         if last_color is None:
             if len(all_bricks) >= 2:
                 last_color = all_bricks[-2].color
-                logger.info(f"📊 [{symbol}] Initialized: prev={last_color}, current={current_color}")
+                logger.info(
+                    f"📊 [{symbol}] Initialized — brick_size={brick_size}, "
+                    f"prev={last_color}, current={current_color}, total_bricks={len(all_bricks)}"
+                )
+                # Store the current color so we exit the init state.
+                # If prev!=current, we fall through to signal detection below.
+                # If prev==current, we track current so next iteration detects a change.
+                if last_color == current_color:
+                    self.last_brick_state[symbol_key] = current_color
+                    return None
             else:
                 self.last_brick_state[symbol_key] = current_color
                 return None
 
         # IMPORTANT: Only update state when color has changed.
-        # Do NOT update on every tick — if we update before the trade executes
-        # and the trade fails, the reversal signal is permanently lost.
         if last_color == current_color:
             return None
 
-        # Color changed → signal to fire. Update state here so we don't
-        # double-fire on the same reversal. If trade execution fails below,
-        # the position stays open but we won't hammer the broker with retries.
+        # Color changed → signal. Update state so we don't double-fire.
         self.last_brick_state[symbol_key] = current_color
 
         signal = 'BUY' if current_color == 'green' else 'SELL'
-        logger.info(f"📊 Signal: {symbol} on account {account_id}: {last_color} → {current_color} → {signal}")
+        logger.info(f"🚦 SIGNAL [{symbol}] account={account_id}: {last_color}→{current_color} → {signal} (brick_size={brick_size})")
         return {'symbol': symbol, 'signal': signal, 'account_id': account_id, 'config': config}
 
     async def evaluate_symbol(self, symbol_key: str):
