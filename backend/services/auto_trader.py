@@ -313,18 +313,39 @@ class AutoTrader:
             )
 
         if last_color is None:
+            # CRITICAL: Sync state from actual open MT5 position first.
+            # Without this, a restart while a position is open causes the bot to
+            # read "red, red" from historical candles and set state=red — then
+            # subsequent red bricks are silently skipped because state already matches.
+            # Result: BUY stays open forever even as red bricks form.
+            try:
+                open_positions = mt5.positions_get(symbol=symbol)
+                if open_positions:
+                    for pos in open_positions:
+                        if pos.magic == 0 or True:  # Accept any position for this symbol
+                            synced_color = 'green' if pos.type == mt5.POSITION_TYPE_BUY else 'red'
+                            self.last_brick_state[symbol_key] = synced_color
+                            logger.info(
+                                f"🔄 [{symbol}] Synced state from open {'BUY' if pos.type == 0 else 'SELL'} "
+                                f"position (ticket={pos.ticket}) → last_brick_state='{synced_color}'. "
+                                f"Waiting for {'red' if synced_color == 'green' else 'green'} brick to reverse."
+                            )
+                            return None  # Wait for the reversal — do NOT fire immediately
+            except Exception as e:
+                logger.warning(f"⚠️ [{symbol}] Could not sync from MT5 positions: {e}")
+
+            # No open position — determine state from historical bricks
             if len(all_bricks) >= 2:
                 last_color = all_bricks[-2].color
                 logger.info(
-                    f"📊 [{symbol}] Initialized — brick_size={brick_size}, "
+                    f"📊 [{symbol}] Initialized from history — brick_size={brick_size}, "
                     f"prev={last_color}, current={current_color}, total_bricks={len(all_bricks)}"
                 )
-                # Store the current color so we exit the init state.
-                # If prev!=current, we fall through to signal detection below.
-                # If prev==current, we track current so next iteration detects a change.
+                # Same color: track current and wait for change
                 if last_color == current_color:
                     self.last_brick_state[symbol_key] = current_color
                     return None
+                # Different color: fall through to fire signal below
             else:
                 self.last_brick_state[symbol_key] = current_color
                 return None
