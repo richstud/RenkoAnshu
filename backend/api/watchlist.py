@@ -9,9 +9,10 @@ import logging
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/watchlist", tags=["watchlist"])
 
-# Initialize Supabase client
+# Initialize Supabase client — use service_role key to bypass RLS
 from supabase import create_client
-supabase = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
+_sb_key = settings.SUPABASE_SERVICE_KEY or settings.SUPABASE_KEY
+supabase = create_client(settings.SUPABASE_URL, _sb_key)
 
 
 class WatchlistItem(BaseModel):
