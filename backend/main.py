@@ -24,13 +24,19 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Renko Reversal Gold Bot")
 
-# Add CORS middleware
+# Add CORS middleware — restrict to known frontend origins only
+_ALLOWED_ORIGINS = [
+    "https://renkomt5.netlify.app",  # Netlify frontend
+    "https://api.turnends.win",       # Cloudflare Tunnel (same-origin API calls)
+    "http://localhost:5173",          # Local dev (Vite default port)
+    "http://localhost:3000",          # Local dev (alternate port)
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify your frontend domain
+    allow_origins=_ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
 )
 
 # Include API routers
