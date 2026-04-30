@@ -37,11 +37,12 @@ class AutoTrader:
         try:
             logger.info("🤖 Initializing Auto-Trader Service...")
             
-            # Initialize Supabase client
+            # Initialize Supabase client — use service_role key to bypass RLS
             from supabase import create_client
+            sb_key = settings.SUPABASE_SERVICE_KEY or settings.SUPABASE_KEY
             self.supabase_client = create_client(
                 settings.SUPABASE_URL,
-                settings.SUPABASE_KEY
+                sb_key
             )
             
             # Load enabled symbols from database
