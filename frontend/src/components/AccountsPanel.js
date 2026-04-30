@@ -1,0 +1,9 @@
+import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
+export default function AccountsPanel({ accounts, selectedAccount, onSelectAccount }) {
+    return (_jsxs("div", { className: "bg-slate-800 p-4 rounded-lg", children: [_jsx("h2", { className: "text-xl font-semibold mb-3", children: "\uD83D\uDCCA Accounts" }), accounts.length === 0 ? (_jsx("div", { className: "text-slate-400 text-sm", children: "No accounts loaded" })) : (_jsx("div", { className: "space-y-2", children: accounts.map((acc) => {
+                    const isSelected = selectedAccount?.login === acc.login;
+                    return (_jsxs("button", { onClick: () => onSelectAccount(acc), className: `w-full p-3 rounded text-left transition ${isSelected
+                            ? 'bg-blue-600 border-2 border-blue-400'
+                            : 'bg-slate-700 border-2 border-slate-600 hover:border-slate-500'}`, children: [_jsxs("div", { className: "flex justify-between items-center", children: [_jsx("span", { className: "text-sm font-semibold text-white", children: acc.login }), _jsx("span", { className: `text-xs px-2 py-0.5 rounded ${acc.status === 'active' ? 'bg-green-900 text-green-300' : 'bg-red-900 text-red-300'}`, children: acc.status })] }), _jsx("div", { className: "text-xs text-slate-400 mt-1", children: acc.server }), acc.balance !== undefined && (_jsxs("div", { className: "mt-1 flex gap-3", children: [_jsxs("span", { className: "text-xs text-yellow-300 font-mono", children: ["\uD83D\uDCB0 $", acc.balance.toFixed(2)] }), acc.equity !== undefined && acc.equity !== acc.balance && (_jsxs("span", { className: `text-xs font-mono ${acc.equity >= acc.balance ? 'text-green-400' : 'text-red-400'}`, children: ["Eq: $", acc.equity.toFixed(2)] }))] }))] }, acc.login));
+                }) }))] }));
+}
