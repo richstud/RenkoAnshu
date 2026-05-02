@@ -64,8 +64,8 @@ class AutoTrader:
             if info is not None:
                 return symbol
 
-        # Try common broker suffixes used by XM and others
-        for suffix in [".", "+", "m", "micro"]:
+        # Try common broker suffixes used by XM and others ('#' is XM's crypto/CFD suffix)
+        for suffix in ["#", ".", "+", "m", "micro"]:
             candidate = symbol + suffix
             if mt5.symbol_select(candidate, True):
                 info = mt5.symbol_info(candidate)

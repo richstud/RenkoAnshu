@@ -3,7 +3,7 @@ import logging
 import time
 from typing import Optional
 
-from fastapi import FastAPI, WebSocket, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -314,14 +314,31 @@ async def websocket_live_data(websocket: WebSocket):
         except (asyncio.TimeoutError, Exception):
             pass
 
-        # Ensure all subscribed symbols are in MT5 Market Watch so ticks arrive
+        # Ensure all subscribed symbols are in MT5 Market Watch so ticks arrive.
+        # Build a map: requested name → resolved MT5 name (handles XM '#' suffix, etc.)
+        symbol_map: dict = {}  # {requested: resolved}
         if symbols:
             def _select_symbols():
                 for sym in symbols:
-                    try:
-                        mt5_module.symbol_select(sym, True)
-                    except Exception:
-                        pass
+                    # Try exact name first
+                    if mt5_module.symbol_select(sym, True) and mt5_module.symbol_info_tick(sym):
+                        symbol_map[sym] = sym
+                        continue
+                    # Try '#' suffix (XM broker convention for CFD/crypto)
+                    hashed = sym + "#"
+                    if mt5_module.symbol_select(hashed, True) and mt5_module.symbol_info_tick(hashed):
+                        symbol_map[sym] = hashed
+                        logger.info(f"ws/live: resolved {sym} → {hashed}")
+                        continue
+                    # Try other common suffixes
+                    for suffix in [".", "+", "m"]:
+                        candidate = sym + suffix
+                        if mt5_module.symbol_select(candidate, True) and mt5_module.symbol_info_tick(candidate):
+                            symbol_map[sym] = candidate
+                            logger.info(f"ws/live: resolved {sym} → {candidate}")
+                            break
+                    else:
+                        symbol_map[sym] = sym  # keep original as fallback
             import asyncio as _aio
             loop = _aio.get_event_loop()
             await loop.run_in_executor(None, _select_symbols)
@@ -365,8 +382,10 @@ async def websocket_live_data(websocket: WebSocket):
             if symbols:
                 quotes = {}
                 for sym in symbols:
-                    tick = mt5_module.symbol_info_tick(sym)
+                    resolved = symbol_map.get(sym, sym)
+                    tick = mt5_module.symbol_info_tick(resolved)
                     if tick:
+                        # Key quote by original name so frontend can match it
                         quotes[sym] = {
                             "bid": float(tick.bid),
                             "ask": float(tick.ask),

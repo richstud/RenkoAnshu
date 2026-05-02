@@ -38,13 +38,18 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/renko", tags=["renko"])
 
 # Common symbol aliases — broker may use different names
+# XM broker uses '#' suffix for crypto/CFD instruments (e.g. BTCUSD → BTCUSD#)
 SYMBOL_ALIASES = {
-    "XAUUSD": ["GOLD", "XAUUSDm", "XAUUSD.", "GOLD."],
-    "GOLD":   ["XAUUSD", "XAUUSDm", "XAUUSD."],
-    "XAGUSD": ["SILVER", "XAGUSDm"],
-    "SILVER": ["XAGUSD", "XAGUSDm"],
-    "BTCUSD": ["BTCUSD.", "BTCUSDm", "BTC/USD"],
-    "ETHUSD": ["ETHUSD.", "ETHUSDm", "ETH/USD"],
+    "XAUUSD": ["XAUUSD#", "GOLD", "GOLD#", "XAUUSDm", "XAUUSD.", "GOLD."],
+    "GOLD":   ["GOLD#", "XAUUSD", "XAUUSD#", "XAUUSDm", "XAUUSD."],
+    "XAGUSD": ["XAGUSD#", "SILVER", "SILVER#", "XAGUSDm"],
+    "SILVER": ["SILVER#", "XAGUSD", "XAGUSD#", "XAGUSDm"],
+    "BTCUSD": ["BTCUSD#", "BTCUSD.", "BTCUSDm", "BTC/USD"],
+    "ETHUSD": ["ETHUSD#", "ETHUSD.", "ETHUSDm", "ETH/USD"],
+    "LTCUSD": ["LTCUSD#", "LTCUSD.", "LTCUSDm"],
+    "XRPUSD": ["XRPUSD#", "XRPUSD.", "XRPUSDm"],
+    "BTCEUR": ["BTCEUR#", "BTCEUR."],
+    "ETHEUR": ["ETHEUR#", "ETHEUR."],
 }
 
 def resolve_mt5_symbol(symbol: str) -> str:
