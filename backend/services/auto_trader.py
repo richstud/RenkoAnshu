@@ -268,27 +268,40 @@ class AutoTrader:
 
         engine_key = f"{account_id}_{symbol}_{brick_size}"
         if engine_key not in self.renko_engines:
+            # Resolve broker-specific symbol name (e.g. BTCUSD → BTCUSD# on XM)
+            # before ANY mt5 call — copy_rates and symbol_info_tick both need the real name
+            resolved = self._resolve_and_select_symbol(symbol)
+            if resolved != symbol:
+                logger.info(f"🔀 [{symbol}] Using broker name: {resolved}")
+            # Cache the resolved name so all later calls in this engine_key use it
+            self._resolved_symbols = getattr(self, '_resolved_symbols', {})
+            self._resolved_symbols[engine_key] = resolved
+
             logger.info(f"🏗️ Creating Renko engine for {symbol} with brick_size={brick_size} (from watchlist)")
             self.renko_engines[engine_key] = RenkoEngine(brick_size)
             self.strategy_engines[engine_key] = StrategyEngine(self.renko_engines[engine_key])
 
             # Seed engine with historical M1 candles so the first brick level is realistic
-            rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M1, 0, 200)
+            rates = mt5.copy_rates_from_pos(resolved, mt5.TIMEFRAME_M1, 0, 200)
             if rates is not None and len(rates) > 0:
                 for rate in sorted(rates, key=lambda r: int(r['time'])):
                     self.renko_engines[engine_key].feed_tick(rate['close'])
                 brick_count = len(self.renko_engines[engine_key].bricks)
                 logger.info(f"📊 [{symbol}] Seeded {len(rates)} candles → {brick_count} bricks (brick_size={brick_size})")
             else:
-                logger.warning(f"⚠️ [{symbol}] No historical data for engine seed")
+                logger.warning(f"⚠️ [{symbol}] No historical data for engine seed — resolved={resolved}")
 
         renko = self.renko_engines[engine_key]
 
+        # Use cached resolved name for all MT5 tick/info calls
+        self._resolved_symbols = getattr(self, '_resolved_symbols', {})
+        resolved = self._resolved_symbols.get(engine_key, symbol)
+
         # Feed current live tick (mid price) — detects bricks the instant price crosses a boundary,
         # not just once per minute when an M1 candle closes.
-        tick = mt5.symbol_info_tick(symbol)
+        tick = mt5.symbol_info_tick(resolved)
         if tick is None:
-            logger.debug(f"⏳ No tick data for {symbol}")
+            logger.debug(f"⏳ No tick data for {symbol} (resolved={resolved})")
             return None
         live_price = (tick.bid + tick.ask) / 2.0
         renko.feed_tick(live_price)
