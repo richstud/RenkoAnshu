@@ -2,7 +2,7 @@ import asyncio
 import logging
 from typing import Optional
 
-from fastapi import FastAPI, WebSocket, HTTPException
+from fastapi import FastAPI, WebSocket, HTTPException, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -260,6 +260,33 @@ def diagnose():
 # WebSocket - Real-time Data Streaming
 # ===================================
 
+# Broker-specific symbol aliases for live tick resolution.
+# XM uses GOLD.i# for gold, BTCUSD# for crypto, EURUSD# for forex, etc.
+_LIVE_ALIASES: dict = {
+    "GOLD":   ["GOLD.i#", "GOLD#", "XAUUSD#", "XAUUSD"],
+    "XAUUSD": ["XAUUSD#", "GOLD.i#", "GOLD#", "GOLD"],
+    "SILVER": ["SILVER.i#", "SILVER#", "XAGUSD#", "XAGUSD"],
+    "XAGUSD": ["XAGUSD#", "SILVER.i#", "SILVER#", "SILVER"],
+    "BTCUSD": ["BTCUSD#", "BTCUSD.", "BTCUSDm"],
+    "ETHUSD": ["ETHUSD#", "ETHUSD.", "ETHUSDm"],
+    "LTCUSD": ["LTCUSD#", "LTCUSD.", "LTCUSDm"],
+    "XRPUSD": ["XRPUSD#", "XRPUSD.", "XRPUSDm"],
+}
+
+
+def _resolve_live_symbol(mt5_mod, sym: str) -> str:
+    """Resolve a clean symbol name to the broker's actual name (e.g. GOLD → GOLD.i# on XM)."""
+    if mt5_mod.symbol_info(sym) is not None:
+        return sym
+    for alias in _LIVE_ALIASES.get(sym.upper(), []):
+        if mt5_mod.symbol_info(alias) is not None:
+            return alias
+    for suffix in ["#", ".i#", ".", "+", "m"]:
+        candidate = sym + suffix
+        if mt5_mod.symbol_info(candidate) is not None:
+            return candidate
+    return sym  # unchanged — MT5 will return None and tick will be skipped
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     """WebSocket endpoint for real-time data streaming"""
@@ -302,17 +329,24 @@ async def websocket_live_data(websocket: WebSocket):
         except (asyncio.TimeoutError, Exception):
             pass
 
-        # Ensure all subscribed symbols are in MT5 Market Watch so ticks arrive
+        # Resolve all symbols to broker names and select in MT5 Market Watch at connect time.
+        # symbol_map: {clean_name → broker_name} e.g. {"GOLD": "GOLD.i#", "BTCUSD": "BTCUSD#"}
+        symbol_map: dict = {}
         if symbols:
-            def _select_symbols():
+            def _build_map():
+                result = {}
                 for sym in symbols:
+                    resolved = _resolve_live_symbol(mt5_module, sym)
+                    if resolved != sym:
+                        logger.info(f"🔀 ws/live: {sym} → {resolved}")
                     try:
-                        mt5_module.symbol_select(sym, True)
+                        mt5_module.symbol_select(resolved, True)
                     except Exception:
                         pass
-            import asyncio as _aio
-            loop = _aio.get_event_loop()
-            await loop.run_in_executor(None, _select_symbols)
+                    result[sym] = resolved
+                return result
+            loop = asyncio.get_event_loop()
+            symbol_map = await loop.run_in_executor(None, _build_map)
 
         while True:
             update: dict = {}
@@ -341,11 +375,12 @@ async def websocket_live_data(websocket: WebSocket):
                 except Exception:
                     pass
 
-            # Live quotes for subscribed symbols
+            # Live quotes — use resolved broker names for MT5 calls, key by clean name for frontend
             if symbols:
                 quotes = {}
                 for sym in symbols:
-                    tick = mt5_module.symbol_info_tick(sym)
+                    resolved = symbol_map.get(sym, sym)
+                    tick = mt5_module.symbol_info_tick(resolved)
                     if tick:
                         quotes[sym] = {
                             "bid": float(tick.bid),

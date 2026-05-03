@@ -13,42 +13,52 @@ logger = logging.getLogger("price_manager")
 class PriceManager:
     """Manages real-time price data from MT5"""
     
+    # Broker-specific symbol aliases (same logic as renko_chart and ws/live)
+    _SYMBOL_ALIASES: dict = {
+        "GOLD":   ["GOLD.i#", "GOLD#", "XAUUSD#", "XAUUSD"],
+        "XAUUSD": ["XAUUSD#", "GOLD.i#", "GOLD#", "GOLD"],
+        "SILVER": ["SILVER.i#", "SILVER#", "XAGUSD#", "XAGUSD"],
+        "BTCUSD": ["BTCUSD#", "BTCUSD.", "BTCUSDm"],
+        "ETHUSD": ["ETHUSD#", "ETHUSD.", "ETHUSDm"],
+    }
+
+    @staticmethod
+    def _resolve_symbol(symbol: str) -> Optional[str]:
+        """Resolve symbol to broker's actual name (e.g. GOLD → GOLD.i# on XM)."""
+        if mt5.symbol_info(symbol) is not None:
+            return symbol
+        for alias in PriceManager._SYMBOL_ALIASES.get(symbol.upper(), []):
+            if mt5.symbol_info(alias) is not None:
+                logger.debug(f"PriceManager: {symbol} → {alias}")
+                return alias
+        for suffix in ["#", ".i#", ".", "+", "m"]:
+            candidate = symbol + suffix
+            if mt5.symbol_info(candidate) is not None:
+                return candidate
+        return None
+
     @staticmethod
     def get_quote(symbol: str) -> Optional[Dict]:
-        """
-        Get current bid/ask for a symbol from MT5
-        
-        Returns:
-            {
-                "symbol": "XAUUSD",
-                "bid": 2050.45,
-                "ask": 2050.55,
-                "last_update": "2024-04-08T10:30:45Z",
-                "bid_size": 100,
-                "ask_size": 100
-            }
-        """
+        """Get current bid/ask for a symbol from MT5. Resolves broker name automatically."""
         try:
-            # Ensure symbol is visible in MT5 Market Watch
-            symbol_info = mt5.symbol_info(symbol)
-            if symbol_info is None:
-                logger.warning(f"Symbol {symbol} not found in MT5")
+            resolved = PriceManager._resolve_symbol(symbol)
+            if resolved is None:
+                logger.warning(f"Symbol {symbol} not found in MT5 (tried # .i# suffixes)")
                 return None
-            
-            # If symbol not visible, select it
+
+            symbol_info = mt5.symbol_info(resolved)
             if not symbol_info.visible:
-                if not mt5.symbol_select(symbol, True):
-                    logger.warning(f"Could not select symbol {symbol}")
+                if not mt5.symbol_select(resolved, True):
+                    logger.warning(f"Could not select symbol {resolved}")
                     return None
-            
-            # Get tick data
-            tick = mt5.symbol_info_tick(symbol)
+
+            tick = mt5.symbol_info_tick(resolved)
             if tick is None:
-                logger.warning(f"No tick data for {symbol} - MT5 might not be initialized")
+                logger.warning(f"No tick data for {resolved}")
                 return None
-            
+
             return {
-                "symbol": symbol,
+                "symbol": symbol,   # clean name for UI matching
                 "bid": float(tick.bid),
                 "ask": float(tick.ask),
                 "last_update": tick.time_msc,

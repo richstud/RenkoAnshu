@@ -22,7 +22,8 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
   const [symbol, setSymbol] = useState<string>(initialSymbol || 'EURUSD');
   // Use symbol-aware default brick size: Gold/XAUUSD → 5.0, JPY pairs → 0.05, everything else → 0.005
   const getDefaultBrickSize = (sym: string) => {
-    const s = sym.toUpperCase();
+    // Strip broker suffixes before matching: BTCUSD# → BTCUSD, GOLD.i# → GOLD
+    const s = sym.toUpperCase().split('#')[0].split('.')[0];
     if (s === 'GOLD' || s === 'XAUUSD') return 5.0;
     if (s === 'BTCUSD' || s === 'BITCOIN') return 100.0;
     if (s.includes('JPY')) return 0.05;

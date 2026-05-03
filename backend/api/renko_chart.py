@@ -37,35 +37,37 @@ except ImportError:
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/renko", tags=["renko"])
 
-# Common symbol aliases — broker may use different names
+# Common symbol aliases — broker may use different names.
+# XM uses '#' suffix for CFDs/crypto (BTCUSD→BTCUSD#) and '.i#' for precious metals (GOLD→GOLD.i#).
 SYMBOL_ALIASES = {
-    "XAUUSD": ["GOLD", "XAUUSDm", "XAUUSD.", "GOLD."],
-    "GOLD":   ["XAUUSD", "XAUUSDm", "XAUUSD."],
-    "XAGUSD": ["SILVER", "XAGUSDm"],
-    "SILVER": ["XAGUSD", "XAGUSDm"],
-    "BTCUSD": ["BTCUSD.", "BTCUSDm", "BTC/USD"],
-    "ETHUSD": ["ETHUSD.", "ETHUSDm", "ETH/USD"],
+    "XAUUSD": ["XAUUSD#", "GOLD.i#", "GOLD#", "GOLD", "XAUUSDm", "XAUUSD."],
+    "GOLD":   ["GOLD.i#", "GOLD#", "XAUUSD#", "XAUUSD", "XAUUSDm", "XAUUSD."],
+    "XAGUSD": ["XAGUSD#", "SILVER.i#", "SILVER#", "SILVER", "XAGUSDm"],
+    "SILVER": ["SILVER.i#", "SILVER#", "XAGUSD#", "XAGUSD", "XAGUSDm"],
+    "BTCUSD": ["BTCUSD#", "BTCUSD.", "BTCUSDm", "BTC/USD"],
+    "ETHUSD": ["ETHUSD#", "ETHUSD.", "ETHUSDm", "ETH/USD"],
+    "LTCUSD": ["LTCUSD#", "LTCUSD.", "LTCUSDm"],
+    "XRPUSD": ["XRPUSD#", "XRPUSD.", "XRPUSDm"],
 }
 
 def resolve_mt5_symbol(symbol: str) -> str:
     """Resolve symbol to the name MT5/broker actually recognizes.
-    Tries exact match first, then known aliases."""
+    Tries exact match first, then known aliases (including GOLD.i# for XM), then suffix patterns."""
     info = mt5.symbol_info(symbol)
     if info is not None:
         return symbol
+    # Try explicit alias list — handles XM-specific names like GOLD.i#, BTCUSD#
     for alias in SYMBOL_ALIASES.get(symbol.upper(), []):
         info = mt5.symbol_info(alias)
         if info is not None:
             logger.info(f"🔀 Symbol {symbol} resolved to broker alias: {alias}")
             return alias
-    # Last resort: search MT5 symbol list for partial match
-    all_symbols = mt5.symbols_get()
-    if all_symbols:
-        upper = symbol.upper().replace("USD", "")
-        for s in all_symbols:
-            if upper in s.name.upper():
-                logger.info(f"🔀 Symbol {symbol} fuzzy-resolved to: {s.name}")
-                return s.name
+    # Try common broker suffix patterns as extra fallback
+    for suffix in ["#", ".i#", ".", "+", "m"]:
+        candidate = symbol + suffix
+        if mt5.symbol_info(candidate) is not None:
+            logger.info(f"🔀 Symbol {symbol} resolved via suffix to: {candidate}")
+            return candidate
     return symbol  # Return original — caller will get the proper error
 
 # Store Renko engines per symbol
@@ -367,17 +369,16 @@ async def stream_renko_chart(websocket: WebSocket, symbol: str, brick_size: floa
         # Resolve broker symbol name (e.g. XAUUSD → GOLD)
         symbol = resolve_mt5_symbol(symbol)
 
-        # Get default brick size
+        # Get default brick size (only when client doesn't specify)
         if brick_size is None:
             brick_sizes = {
-                "EURUSD": 0.005,
-                "GBPUSD": 0.005,
-                "USDJPY": 0.05,
-                "GOLD": 5.0,
-                "XAUUSD": 5.0,
-                "BTCUSD": 1.0,
+                "EURUSD": 0.005, "GBPUSD": 0.005, "USDJPY": 0.05,
+                "GOLD": 5.0, "XAUUSD": 5.0,
+                "BTCUSD": 100.0, "ETHUSD": 5.0,
             }
-            brick_size = brick_sizes.get(symbol, 0.01)
+            # Strip broker suffixes before lookup: BTCUSD# → BTCUSD, GOLD.i# → GOLD
+            clean_sym = symbol.upper().split('#')[0].split('.')[0]
+            brick_size = brick_sizes.get(clean_sym, brick_sizes.get(symbol.upper(), 0.01))
         
         # Verify symbol exists in MT5
         symbol_info = mt5.symbol_info(symbol)
