@@ -108,16 +108,20 @@ async def get_all_mt5_symbols(search: str = Query(default='', description="Searc
 
 
 _DEFAULT_SYMBOLS = [
-    {"id": 1, "symbol": "GOLD", "description": "Gold vs USD (XM)", "pip_value": 0.01, "is_active": True},
-    {"id": 2, "symbol": "EURUSD", "description": "EUR vs USD", "pip_value": 0.0001, "is_active": True},
-    {"id": 3, "symbol": "GBPUSD", "description": "GBP vs USD", "pip_value": 0.0001, "is_active": True},
-    {"id": 4, "symbol": "USDJPY", "description": "USD vs JPY", "pip_value": 0.01, "is_active": True},
-    {"id": 5, "symbol": "AUDUSD", "description": "AUD vs USD", "pip_value": 0.0001, "is_active": True},
-    {"id": 6, "symbol": "USDCAD", "description": "USD vs CAD", "pip_value": 0.0001, "is_active": True},
-    {"id": 7, "symbol": "USDCHF", "description": "USD vs CHF", "pip_value": 0.0001, "is_active": True},
-    {"id": 8, "symbol": "BTCUSD", "description": "Bitcoin vs USD", "pip_value": 1.0, "is_active": True},
-    {"id": 9, "symbol": "ETHUSD", "description": "Ethereum vs USD", "pip_value": 0.1, "is_active": True},
+    {"id": 1,  "symbol": "GOLD",   "description": "Gold vs USD (XM)", "pip_value": 0.01, "is_active": True},
+    {"id": 2,  "symbol": "EURUSD", "description": "EUR vs USD", "pip_value": 0.0001, "is_active": True},
+    {"id": 3,  "symbol": "GBPUSD", "description": "GBP vs USD", "pip_value": 0.0001, "is_active": True},
+    {"id": 4,  "symbol": "USDJPY", "description": "USD vs JPY", "pip_value": 0.01,   "is_active": True},
+    {"id": 5,  "symbol": "AUDUSD", "description": "AUD vs USD", "pip_value": 0.0001, "is_active": True},
+    {"id": 6,  "symbol": "NZDUSD", "description": "NZD vs USD", "pip_value": 0.0001, "is_active": True},
+    {"id": 7,  "symbol": "USDCAD", "description": "USD vs CAD", "pip_value": 0.0001, "is_active": True},
+    {"id": 8,  "symbol": "USDCHF", "description": "USD vs CHF", "pip_value": 0.0001, "is_active": True},
+    {"id": 9,  "symbol": "BTCUSD", "description": "Bitcoin vs USD", "pip_value": 1.0, "is_active": True},
+    {"id": 10, "symbol": "ETHUSD", "description": "Ethereum vs USD", "pip_value": 0.1, "is_active": True},
 ]
+
+# Broker suffix aliases — XM uses '#' for CFD/crypto instruments
+_BROKER_SUFFIX_ALIASES = ["#", ".", "+", "m"]
 
 
 @router.get("/tickers")
@@ -144,8 +148,16 @@ async def get_tickers():
             logger.warning(f"Could not query available_symbols table: {db_err}")
 
         if db_data:
-            symbol_list = db_data
-            logger.info(f"📋 Loaded {len(symbol_list)} symbols from Supabase")
+            # Merge Supabase data with _DEFAULT_SYMBOLS to ensure no symbol is dropped.
+            # Supabase is the primary source — defaults fill in any gaps.
+            db_symbols_set = {row['symbol'].upper() for row in db_data}
+            merged = list(db_data)
+            for default_sym in _DEFAULT_SYMBOLS:
+                if default_sym['symbol'].upper() not in db_symbols_set:
+                    merged.append(default_sym)
+                    logger.info(f"📋 Added missing default symbol: {default_sym['symbol']}")
+            symbol_list = merged
+            logger.info(f"📋 Loaded {len(db_data)} from Supabase + {len(merged) - len(db_data)} defaults = {len(merged)} total")
         else:
             # Tier 2: MT5 popular symbols
             import asyncio
@@ -156,16 +168,31 @@ async def get_tickers():
                 for s in _DEFAULT_SYMBOLS:
                     try:
                         info = mt5.symbol_info(s["symbol"])
+                        # XM and some brokers use '#' suffix (e.g. GOLD → GOLD#, BTCUSD → BTCUSD#)
+                        # Try suffix variants when exact name is not found
+                        resolved_name = s["symbol"]
+                        if info is None:
+                            for suffix in _BROKER_SUFFIX_ALIASES:
+                                candidate = s["symbol"] + suffix
+                                info = mt5.symbol_info(candidate)
+                                if info is not None:
+                                    resolved_name = candidate
+                                    logger.info(f"🔀 Ticker {s['symbol']} resolved to {candidate}")
+                                    break
                         if info is not None:
                             result.append({
                                 "id": s["id"],
-                                "symbol": info.name,
+                                "symbol": s["symbol"],        # always use the clean name for UI
                                 "description": info.description or s["description"],
                                 "pip_value": float(info.point) if info.point else s["pip_value"],
                                 "is_active": True,
+                                "_resolved": resolved_name,    # internal: broker's real name
                             })
+                        else:
+                            # Include in list with defaults so UI shows it (price will be fetched via WS)
+                            result.append(s)
                     except Exception:
-                        pass
+                        result.append(s)
                 return result
 
             try:
@@ -189,6 +216,7 @@ async def get_tickers():
             "unavailable": 0,
             "data": symbol_list,
         }
+        # Don't cache for long — allow GOLD price to appear quickly after broker connection
         _tickers_cache = result
         _tickers_cache_time = now
         return result
