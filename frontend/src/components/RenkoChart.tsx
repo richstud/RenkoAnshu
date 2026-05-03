@@ -20,9 +20,9 @@ interface RenkoChartProps {
 
 export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBrickSize, accountId, onAddToWatchlist }: RenkoChartProps) {
   const [symbol, setSymbol] = useState<string>(initialSymbol || 'GOLD');
-  // Use symbol-aware default brick size: Gold/XAUUSD → 5.0, JPY pairs → 0.05, everything else → 0.005
+  // Strip broker-specific suffixes (XM: GOLD.i#, BTCUSD#) before matching
   const getDefaultBrickSize = (sym: string) => {
-    const s = sym.toUpperCase();
+    const s = sym.toUpperCase().split('#')[0].split('.')[0];
     if (s === 'GOLD' || s === 'XAUUSD') return 5.0;
     if (s === 'BTCUSD' || s === 'BITCOIN') return 100.0;
     if (s.includes('JPY')) return 0.05;

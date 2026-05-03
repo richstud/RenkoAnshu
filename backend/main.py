@@ -330,8 +330,8 @@ async def websocket_live_data(websocket: WebSocket):
                         symbol_map[sym] = hashed
                         logger.info(f"ws/live: resolved {sym} → {hashed}")
                         continue
-                    # Try other common suffixes
-                    for suffix in [".", "+", "m"]:
+                    # Try other common suffixes — includes .i# for XM precious metals (e.g. GOLD.i#)
+                    for suffix in [".i#", ".", "+", "m"]:
                         candidate = sym + suffix
                         if mt5_module.symbol_select(candidate, True) and mt5_module.symbol_info_tick(candidate):
                             symbol_map[sym] = candidate

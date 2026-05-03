@@ -19,7 +19,7 @@ class PriceManager:
         info = mt5.symbol_info(symbol)
         if info is not None:
             return symbol
-        for suffix in ["#", ".", "+", "m"]:
+        for suffix in [".i#", "#", ".", "+", "m"]:
             candidate = symbol + suffix
             info = mt5.symbol_info(candidate)
             if info is not None:
