@@ -16,6 +16,21 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+# Broker-specific symbol aliases — must match renko_chart.py.
+# XM uses '.i#' for precious metals (e.g. GOLD → GOLD.i#) and '#' for crypto CFDs.
+_SYMBOL_ALIASES: Dict[str, List[str]] = {
+    "XAUUSD": ["XAUUSD#", "GOLD.i#", "GOLD#", "GOLD", "XAUUSDm", "XAUUSD.", "GOLD."],
+    "GOLD":   ["GOLD.i#", "GOLD#", "XAUUSD#", "XAUUSD", "XAUUSDm", "XAUUSD."],
+    "XAGUSD": ["XAGUSD#", "SILVER.i#", "SILVER#", "SILVER", "XAGUSDm"],
+    "SILVER": ["SILVER.i#", "SILVER#", "XAGUSD#", "XAGUSD", "XAGUSDm"],
+    "BTCUSD": ["BTCUSD#", "BTCUSD.", "BTCUSDm", "BTC/USD"],
+    "ETHUSD": ["ETHUSD#", "ETHUSD.", "ETHUSDm", "ETH/USD"],
+    "LTCUSD": ["LTCUSD#", "LTCUSD.", "LTCUSDm"],
+    "XRPUSD": ["XRPUSD#", "XRPUSD.", "XRPUSDm"],
+    "BTCEUR": ["BTCEUR#", "BTCEUR."],
+    "ETHEUR": ["ETHEUR#", "ETHEUR."],
+}
+
 class AutoTrader:
     """Background service for automated trading based on Renko strategy"""
     
@@ -54,34 +69,46 @@ class AutoTrader:
     
     def _resolve_and_select_symbol(self, symbol: str) -> str:
         """Ensure symbol is visible in MT5 MarketWatch and resolve broker alias if needed.
-        
-        MT5 returns None from symbol_info() for symbols not in MarketWatch.
-        symbol_select(sym, True) adds it. We also try known aliases (e.g. BTCUSD → BTCUSD.).
+
+        Resolution order:
+        1. Exact name (already in MarketWatch or added successfully)
+        2. Known alias table (_SYMBOL_ALIASES) — handles XM precious metals (GOLD.i#), etc.
+        3. Common suffix patterns: '#', '.i#', '.', '+', 'm'
+        4. Fuzzy prefix scan (last resort — avoided for GOLD to prevent wrong matches)
         """
-        # Try exact name first — add to MarketWatch if found
+        # 1. Try exact name first
         if mt5.symbol_select(symbol, True):
             info = mt5.symbol_info(symbol)
             if info is not None:
                 return symbol
 
-        # Try common broker suffixes used by XM and others ('#' is XM's crypto/CFD suffix)
-        for suffix in ["#", ".", "+", "m", "micro"]:
+        # 2. Try explicit alias list — handles XM-specific names like GOLD.i#, BTCUSD#
+        for alias in _SYMBOL_ALIASES.get(symbol.upper(), []):
+            if mt5.symbol_select(alias, True):
+                info = mt5.symbol_info(alias)
+                if info is not None:
+                    logger.info(f"🔀 [{symbol}] Resolved to broker alias: {alias}")
+                    return alias
+
+        # 3. Try common broker suffix patterns
+        for suffix in ["#", ".i#", ".", "+", "m"]:
             candidate = symbol + suffix
             if mt5.symbol_select(candidate, True):
                 info = mt5.symbol_info(candidate)
                 if info is not None:
-                    logger.info(f"🔀 Symbol {symbol} resolved to broker alias: {candidate}")
+                    logger.info(f"🔀 [{symbol}] Resolved via suffix to: {candidate}")
                     return candidate
 
-        # Fuzzy search: scan all available symbols
-        all_symbols = mt5.symbols_get()
-        if all_symbols:
-            upper = symbol.upper()
-            for s in all_symbols:
-                if s.name.upper().startswith(upper):
-                    mt5.symbol_select(s.name, True)
-                    logger.info(f"🔀 Symbol {symbol} fuzzy-resolved to: {s.name}")
-                    return s.name
+        # 4. Fuzzy search — only if symbol has no alias entry (avoids GOLD matching wrong instruments)
+        if symbol.upper() not in _SYMBOL_ALIASES:
+            all_symbols = mt5.symbols_get()
+            if all_symbols:
+                upper = symbol.upper()
+                for s in all_symbols:
+                    if s.name.upper().startswith(upper):
+                        mt5.symbol_select(s.name, True)
+                        logger.info(f"🔀 [{symbol}] Fuzzy-resolved to: {s.name}")
+                        return s.name
 
         logger.warning(f"⚠️ Could not resolve/select symbol {symbol} — using as-is")
         return symbol
@@ -297,12 +324,29 @@ class AutoTrader:
         self._resolved_symbols = getattr(self, '_resolved_symbols', {})
         resolved = self._resolved_symbols.get(engine_key, symbol)
 
+        # Track consecutive null ticks — if stuck, re-select the symbol to restart streaming
+        self._null_tick_counts = getattr(self, '_null_tick_counts', {})
+
         # Feed current live tick (mid price) — detects bricks the instant price crosses a boundary,
         # not just once per minute when an M1 candle closes.
         tick = mt5.symbol_info_tick(resolved)
         if tick is None:
-            logger.debug(f"⏳ No tick data for {symbol} (resolved={resolved})")
+            count = self._null_tick_counts.get(engine_key, 0) + 1
+            self._null_tick_counts[engine_key] = count
+            if count % 10 == 1:  # Log on first failure, then every 10s
+                logger.warning(f"⚠️ [{symbol}] No tick data (resolved={resolved}, count={count}) — re-selecting symbol")
+            # Re-select the symbol to force MT5 to start streaming ticks again
+            mt5.symbol_select(resolved, True)
+            # Also retry copy_rates if we never got seed data (lazy download)
+            if len(renko.bricks) == 0 and renko.last_price is None and count <= 3:
+                rates = mt5.copy_rates_from_pos(resolved, mt5.TIMEFRAME_M1, 0, 200)
+                if rates is not None and len(rates) > 0:
+                    for rate in sorted(rates, key=lambda r: int(r['time'])):
+                        renko.feed_tick(rate['close'])
+                    logger.info(f"📊 [{symbol}] Late seed: {len(rates)} candles → {len(renko.bricks)} bricks")
             return None
+        # Reset null-tick counter on success
+        self._null_tick_counts[engine_key] = 0
         live_price = (tick.bid + tick.ask) / 2.0
         renko.feed_tick(live_price)
 
@@ -332,7 +376,8 @@ class AutoTrader:
             # subsequent red bricks are silently skipped because state already matches.
             # Result: BUY stays open forever even as red bricks form.
             try:
-                open_positions = mt5.positions_get(symbol=symbol)
+                # Use resolved name (e.g. BTCUSD#) so XM broker positions are found correctly
+                open_positions = mt5.positions_get(symbol=resolved)
                 if open_positions:
                     for pos in open_positions:
                         if pos.magic == 0 or True:  # Accept any position for this symbol

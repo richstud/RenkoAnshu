@@ -120,8 +120,8 @@ _DEFAULT_SYMBOLS = [
     {"id": 10, "symbol": "ETHUSD", "description": "Ethereum vs USD", "pip_value": 0.1, "is_active": True},
 ]
 
-# Broker suffix aliases — XM uses '#' for CFD/crypto instruments
-_BROKER_SUFFIX_ALIASES = ["#", ".", "+", "m"]
+# Broker suffix aliases — XM uses '#' for CFDs/crypto, '.i#' for precious metals (GOLD.i#)
+_BROKER_SUFFIX_ALIASES = [".i#", "#", ".", "+", "m"]
 
 
 @router.get("/tickers")
