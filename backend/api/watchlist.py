@@ -16,11 +16,27 @@ supabase = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
 
 class WatchlistItem(BaseModel):
     symbol: str
+    account_id: int = 0          # sent in body by frontend
     brick_size: float = 1.0
     lot_size: float = 0.01
     algo_enabled: bool = False
     stop_loss_pips: float = 50
     take_profit_pips: float = 100
+
+
+@router.get("/debug")
+async def debug_watchlist():
+    """Return ALL rows in the watchlist table (no filter) for diagnostics"""
+    try:
+        response = supabase.table('watchlist').select('*').execute()
+        return {
+            "status": "success",
+            "total_rows": len(response.data) if response.data else 0,
+            "rows": response.data or []
+        }
+    except Exception as e:
+        logger.error(f"Error fetching debug watchlist: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/")
@@ -49,22 +65,18 @@ async def get_watchlist(account_id: int = Query(...)):
 
 
 @router.post("/")
-async def add_to_watchlist(item: WatchlistItem, account_id: int = Query(...)):
+async def add_to_watchlist(item: WatchlistItem, account_id: int = Query(default=0)):
     """
-    Add symbol to watchlist and enable auto-trading
-    
-    Auto-trading will start within 30 seconds once algo_enabled=true
-    
-    Args:
-        account_id: MT5 account ID
-        item: WatchlistItem with symbol and settings
-    
-    Returns:
-        Success status and added item
+    Add symbol to watchlist and enable auto-trading.
+    account_id accepted from request body (frontend) or query string (backward compat).
     """
+    # Prefer body account_id; fall back to query param
+    effective_account_id = item.account_id or account_id
+    if not effective_account_id:
+        raise HTTPException(status_code=422, detail="account_id is required (body or query param)")
     try:
         # Check if already exists
-        existing = supabase.table('watchlist').select('*').eq('account_id', account_id).eq('symbol', item.symbol).execute()
+        existing = supabase.table('watchlist').select('*').eq('account_id', effective_account_id).eq('symbol', item.symbol).execute()
         
         if existing.data and len(existing.data) > 0:
             # Update existing
@@ -75,13 +87,13 @@ async def add_to_watchlist(item: WatchlistItem, account_id: int = Query(...)):
                 'stop_loss_pips': item.stop_loss_pips,
                 'take_profit_pips': item.take_profit_pips,
                 'updated_at': 'NOW()'
-            }).eq('account_id', account_id).eq('symbol', item.symbol).execute()
+            }).eq('account_id', effective_account_id).eq('symbol', item.symbol).execute()
             
-            logger.info(f"Updated {item.symbol} in watchlist for account {account_id}")
+            logger.info(f"Updated {item.symbol} in watchlist for account {effective_account_id}")
         else:
             # Insert new
             response = supabase.table('watchlist').insert({
-                'account_id': account_id,
+                'account_id': effective_account_id,
                 'symbol': item.symbol,
                 'brick_size': item.brick_size,
                 'lot_size': item.lot_size,
@@ -91,12 +103,13 @@ async def add_to_watchlist(item: WatchlistItem, account_id: int = Query(...)):
                 'is_active': True
             }).execute()
             
-            logger.info(f"Added {item.symbol} to watchlist for account {account_id}")
+            logger.info(f"Added {item.symbol} to watchlist for account {effective_account_id}")
         
         return {
             "status": "success",
             "message": f"Symbol {item.symbol} added/updated in watchlist",
             "symbol": item.symbol,
+            "account_id": effective_account_id,
             "brick_size": item.brick_size,
             "algo_enabled": item.algo_enabled,
             "note": "Auto-trading will start within 30 seconds if algo_enabled=true"
