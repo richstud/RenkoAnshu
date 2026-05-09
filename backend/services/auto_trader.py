@@ -4,6 +4,7 @@ Monitors enabled symbols and executes trades based on Renko brick color changes
 """
 import asyncio
 import logging
+import time
 from datetime import datetime, timedelta
 from typing import Dict, Optional, List
 import MetaTrader5 as mt5
@@ -27,10 +28,11 @@ class AutoTrader:
         self.last_candle_times: Dict[str, int] = {}  # {engine_key: unix_ts} only feed NEW candles
         self.last_trade_time: Dict[str, float] = {}  # {symbol_key: epoch} cooldown per symbol
         self.open_positions: Dict[str, dict] = {}  # {symbol: {ticket, direction, entry_price, ...}}
+        # Pending 1-minute confirmation state per symbol
+        # {symbol_key: {direction, limit_price, start_time, violated, order_placed, order_ticket}}
+        self.pending_signals: Dict[str, dict] = {}
         self.is_running = False
         self.supabase_client = None
-        # Minimum seconds between trades per symbol (prevents rapid re-entry on noisy bricks)
-        # NOTE: removed - using always-in strategy with $50 brick as noise filter
         
     async def initialize(self):
         """Initialize auto-trader service"""
@@ -104,6 +106,7 @@ class AutoTrader:
                     self.strategy_engines.pop(old_key, None)
                     self.last_candle_times.pop(old_key, None)
                     self.last_brick_state.pop(symbol_key, None)
+                    self.pending_signals.pop(symbol_key, None)
                     logger.info(f"🔄 Brick size changed for {symbol}: {old_config['brick_size']} -> {new_brick_size}, engine reset")
                 
                 self.enabled_symbols[symbol_key] = {
@@ -171,17 +174,21 @@ class AutoTrader:
         """Evaluate strategy for all symbols - runs sync MT5 work in thread to avoid blocking event loop"""
         try:
             loop = asyncio.get_event_loop()
-            signals = await loop.run_in_executor(None, self._collect_signals_sync)
-            self._last_evaluation_time = datetime.now()  # Track last successful evaluation
-            for sig in signals:
-                await self.execute_trade(sig['symbol'], sig['signal'], sig['account_id'], sig['config'])
+            results = await loop.run_in_executor(None, self._collect_signals_sync)
+            self._last_evaluation_time = datetime.now()
+            for result in results:
+                # Limit order was already placed inside _check_signal_sync; just log it
+                await self.log_trade(
+                    result['symbol'], result['signal'],
+                    result['entry_price'], result['lot_size'], result['account_id']
+                )
         except Exception as e:
             logger.error(f"❌ Strategy evaluation error: {e}")
 
     def _collect_signals_sync(self) -> list:
         """Synchronous signal collection - runs in thread pool.
         Groups symbols by account to minimize mt5.login() calls (one per account switch).
-        Returns list of {symbol, signal, account_id, config} dicts.
+        Returns list of {symbol, signal, entry_price, lot_size, account_id} dicts (limit orders placed).
         """
         signals = []
 
@@ -225,7 +232,12 @@ class AutoTrader:
         return signals
 
     def _check_signal_sync(self, symbol_key: str, config: dict, account_id: int) -> Optional[dict]:
-        """Pure sync: check Renko signal for one symbol. MT5 must already be switched to account."""
+        """
+        Renko + 1-minute confirmation strategy:
+        - Green brick after red(s): if price stays ABOVE brick close for 60s → BUY LIMIT at brick close
+        - Red brick after green(s): cancel pending BUY LIMIT; if price stays BELOW brick close 60s → SELL LIMIT at brick close
+        Returns a result dict when a limit order is placed, else None.
+        """
         symbol = config['symbol']
         brick_size = config.get('brick_size', 1.0)
 
@@ -234,9 +246,6 @@ class AutoTrader:
             logger.debug(f"⏳ No rate data yet for {symbol}")
             return None
 
-        # Include account_id so each account has its own independent Renko engine.
-        # Without this, accounts sharing the same symbol+brick_size share one engine,
-        # so only the first account to process each candle fires a signal.
         engine_key = f"{account_id}_{symbol}_{brick_size}"
         if engine_key not in self.renko_engines:
             logger.info(f"🏗️ Creating Renko engine for {symbol} with brick_size={brick_size}")
@@ -257,14 +266,14 @@ class AutoTrader:
             for rate in new_rates:
                 renko.feed_tick(rate['close'])
             self.last_candle_times[engine_key] = max(int(r['time']) for r in new_rates)
-            logger.debug(f"Fed {len(new_rates)} new candle(s) to {symbol}")
 
         all_bricks = renko.history(10)
         if len(all_bricks) == 0:
-            logger.info(f"⏳ [{symbol}] No bricks generated yet (need more price movement with brick_size={brick_size})")
+            logger.info(f"⏳ [{symbol}] No bricks yet (brick_size={brick_size})")
             return None
 
-        current_color = all_bricks[-1].color
+        current_brick = all_bricks[-1]
+        current_color = current_brick.color
         last_color = self.last_brick_state.get(symbol_key)
 
         if last_color is None:
@@ -275,14 +284,76 @@ class AutoTrader:
                 self.last_brick_state[symbol_key] = current_color
                 return None
 
+        # Get live bid price for confirmation checks
+        tick = mt5.symbol_info_tick(symbol)
+        current_price = float(tick.bid) if tick else None
+
+        # ── BRICK CHANGE: new brick formed ────────────────────────────────────
+        if last_color != current_color:
+            new_direction = 'BUY' if current_color == 'green' else 'SELL'
+            limit_price = current_brick.close_price  # green close = open+brick_size; red close = open-brick_size
+
+            # Cancel any existing pending limit order for this symbol
+            existing = self.pending_signals.get(symbol_key, {})
+            if existing.get('order_ticket'):
+                self._cancel_pending_order_sync(symbol, account_id, existing['order_ticket'])
+
+            # Close any open position in the opposite direction
+            self._close_opposite_position_sync(symbol, account_id)
+
+            # Start new 60-second confirmation window
+            self.pending_signals[symbol_key] = {
+                'direction': new_direction,
+                'limit_price': limit_price,
+                'start_time': time.time(),
+                'violated': False,
+                'order_placed': False,
+                'order_ticket': None,
+            }
+            logger.info(
+                f"📊 [{symbol}] Brick: {last_color}→{current_color} | "
+                f"Waiting 60s confirmation for {new_direction} LIMIT @ {limit_price}"
+            )
+
         self.last_brick_state[symbol_key] = current_color
 
-        if last_color == current_color:
+        # ── CONFIRMATION CHECK ─────────────────────────────────────────────────
+        pending = self.pending_signals.get(symbol_key)
+        if not pending or pending.get('order_placed') or pending.get('violated'):
+            return None
+        if current_price is None:
             return None
 
-        signal = 'BUY' if current_color == 'green' else 'SELL'
-        logger.info(f"📊 Signal: {symbol} on account {account_id}: {last_color} → {current_color} → {signal}")
-        return {'symbol': symbol, 'signal': signal, 'account_id': account_id, 'config': config}
+        direction = pending['direction']
+        limit_price = pending['limit_price']
+        elapsed = time.time() - pending['start_time']
+
+        # If price crossed to the wrong side during the confirmation window → abort
+        if direction == 'BUY' and current_price < limit_price:
+            pending['violated'] = True
+            logger.info(f"⚠️ [{symbol}] BUY confirmation cancelled: price {current_price} dropped below {limit_price}")
+            return None
+        if direction == 'SELL' and current_price > limit_price:
+            pending['violated'] = True
+            logger.info(f"⚠️ [{symbol}] SELL confirmation cancelled: price {current_price} rose above {limit_price}")
+            return None
+
+        # Place limit order after 60 seconds of uninterrupted confirmation
+        if elapsed >= 60.0:
+            logger.info(f"✅ [{symbol}] {direction} confirmed (60s). Placing LIMIT @ {limit_price}")
+            result = self._place_limit_order_sync(symbol, direction, limit_price, account_id, config)
+            if result:
+                pending['order_placed'] = True
+                pending['order_ticket'] = result['ticket']
+                return {
+                    'symbol': symbol,
+                    'signal': direction,
+                    'account_id': account_id,
+                    'entry_price': limit_price,
+                    'lot_size': result['lot_size'],
+                }
+
+        return None
 
     async def evaluate_symbol(self, symbol_key: str):
         """Legacy single-symbol evaluator - kept for compatibility. Prefer _collect_signals_sync."""
@@ -298,9 +369,9 @@ class AutoTrader:
         except Exception as e:
             logger.warning(f"⚠️ {account_id} switch failed: {e}")
             return
-        sig = self._check_signal_sync(symbol_key, config, account_id)
-        if sig:
-            await self.execute_trade(sig['symbol'], sig['signal'], sig['account_id'], sig['config'])
+        result = self._check_signal_sync(symbol_key, config, account_id)
+        if result:
+            await self.log_trade(result['symbol'], result['signal'], result['entry_price'], result['lot_size'], result['account_id'])
     
     async def execute_trade(self, symbol: str, signal: str, account_id: int, config: dict):
         """Execute a trade based on signal - runs sync MT5 work in thread executor"""
@@ -394,6 +465,98 @@ class AutoTrader:
             'lot_size': lot_size, 'opened_at': datetime.now().isoformat(), 'account_id': account_id,
         }
         return {'entry_price': entry_price, 'lot_size': lot_size}
+
+    def _place_limit_order_sync(self, symbol: str, direction: str, limit_price: float,
+                                account_id: int, config: dict) -> Optional[dict]:
+        """Place a BUY_LIMIT or SELL_LIMIT pending order at the Renko brick close price."""
+        session = mt5_manager.get_session(account_id)
+        if not session:
+            logger.error(f"❌ Account {account_id} not found")
+            return None
+        try:
+            session.switch_to()
+        except Exception as e:
+            logger.error(f"❌ Failed to switch to account {account_id}: {e}")
+            return None
+
+        account_info = mt5.account_info()
+        if account_info is None:
+            logger.error("❌ Failed to get account info")
+            return None
+
+        balance = account_info.balance
+        free_margin = account_info.margin_free
+        manual_lot = config.get('lot_size')
+        lot_size = manual_lot if (manual_lot and manual_lot > 0) else self.calculate_lot_size(balance)
+
+        sym_info = mt5.symbol_info(symbol)
+        if sym_info is None:
+            logger.error(f"❌ Symbol info not available for {symbol}")
+            return None
+
+        limit_price = round(limit_price, sym_info.digits)
+        order_type = mt5.ORDER_TYPE_BUY_LIMIT if direction == 'BUY' else mt5.ORDER_TYPE_SELL_LIMIT
+
+        request = {
+            'action': mt5.TRADE_ACTION_PENDING,
+            'symbol': symbol,
+            'volume': lot_size,
+            'type': order_type,
+            'price': limit_price,
+            'type_time': mt5.ORDER_TIME_GTC,
+            'comment': f'Renko {direction} LIMIT {config.get("brick_size", 1.0)}',
+        }
+
+        # Add SL/TP if configured (in pips)
+        pip_size = sym_info.point * (10 if sym_info.digits % 2 == 1 else 1)
+        sl_pips = config.get('stop_loss_pips', 0)
+        tp_pips = config.get('take_profit_pips', 0)
+        if sl_pips and sl_pips > 0:
+            if direction == 'BUY':
+                request['sl'] = round(limit_price - sl_pips * pip_size, sym_info.digits)
+            else:
+                request['sl'] = round(limit_price + sl_pips * pip_size, sym_info.digits)
+        if tp_pips and tp_pips > 0:
+            if direction == 'BUY':
+                request['tp'] = round(limit_price + tp_pips * pip_size, sym_info.digits)
+            else:
+                request['tp'] = round(limit_price - tp_pips * pip_size, sym_info.digits)
+
+        result = mt5.order_send(request)
+        if result is None or result.retcode != mt5.TRADE_RETCODE_DONE:
+            last_err = mt5.last_error()
+            logger.error(
+                f"❌ Limit order failed for {symbol}: "
+                f"{result.comment if result else 'order_send returned None'} | MT5: {last_err}"
+            )
+            return None
+
+        logger.info(
+            f"✅ LIMIT ORDER PLACED! Ticket: {result.order}, "
+            f"{direction} LIMIT {lot_size} {symbol} @ {limit_price} (account {account_id})"
+        )
+        pos_key = f"{account_id}_{symbol}"
+        self.open_positions[pos_key] = {
+            'ticket': result.order, 'direction': direction, 'entry_price': limit_price,
+            'lot_size': lot_size, 'opened_at': datetime.now().isoformat(),
+            'account_id': account_id, 'order_type': 'LIMIT',
+        }
+        return {'ticket': result.order, 'lot_size': lot_size}
+
+    def _cancel_pending_order_sync(self, symbol: str, account_id: int, ticket: int):
+        """Cancel a specific pending limit order by ticket number."""
+        try:
+            result = mt5.order_send({'action': mt5.TRADE_ACTION_REMOVE, 'order': ticket})
+            if result is None or result.retcode != mt5.TRADE_RETCODE_DONE:
+                logger.warning(
+                    f"⚠️ Could not cancel order {ticket} for {symbol}: "
+                    f"{result.comment if result else 'None'} (may already be filled/expired)"
+                )
+            else:
+                logger.info(f"🚫 Cancelled pending limit order {ticket} for {symbol}")
+            self.open_positions.pop(f"{account_id}_{symbol}", None)
+        except Exception as e:
+            logger.error(f"❌ Error cancelling order {ticket}: {e}")
 
     def _close_opposite_position_sync(self, symbol: str, account_id: int = None):
         """Close any open MT5 position for the symbol synchronously. MT5 must already be switched."""
