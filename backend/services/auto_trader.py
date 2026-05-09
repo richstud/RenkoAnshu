@@ -86,11 +86,12 @@ class AutoTrader:
                 active_logins.add(str(login))
             logger.info(f"📋 Active accounts (DB + MT5 manager): {active_logins or '(none)'}")
             
-            # Fetch all enabled symbols across all accounts
-            response = self.supabase_client.table('watchlist').select('*').eq('algo_enabled', True).execute()
-            logger.info(f"📋 Watchlist rows with algo_enabled=True: {len(response.data) if response.data else 0}")
+            # Fetch all active symbols across all accounts
+            # Use is_active=True as primary filter; algo_enabled=False means user disabled trading for that symbol
+            response = self.supabase_client.table('watchlist').select('*').eq('is_active', True).execute()
+            logger.info(f"📋 Watchlist rows with is_active=True: {len(response.data) if response.data else 0}")
             for item in (response.data or []):
-                logger.info(f"   Row: symbol={item.get('symbol')} account_id={item.get('account_id')} algo_enabled={item.get('algo_enabled')}")
+                logger.info(f"   Row: symbol={item.get('symbol')} account_id={item.get('account_id')} algo_enabled={item.get('algo_enabled')} is_active={item.get('is_active')}")
             
             # Group by account_id to track accounts and their enabled symbols
             accounts_symbols = {}
@@ -98,6 +99,12 @@ class AutoTrader:
             for item in (response.data or []):
                 symbol = item['symbol']
                 account_id = item['account_id']
+                
+                # Skip if user explicitly disabled algo trading (null/missing = enabled by default)
+                algo_enabled = item.get('algo_enabled')
+                if algo_enabled is False:
+                    logger.info(f"   Skipping {symbol} (account {account_id}) — algo_enabled is False")
+                    continue
                 
                 # Skip symbols belonging to inactive/disconnected accounts
                 if str(account_id) not in active_logins:
