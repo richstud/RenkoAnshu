@@ -79,19 +79,32 @@ class AutoTrader:
             # Get active account logins so we skip disconnected accounts
             active_accounts_res = self.supabase_client.table('accounts').select('login').eq('status', 'active').execute()
             active_logins = {str(row['login']) for row in (active_accounts_res.data or [])}
+            logger.info(f"📋 Active accounts in DB: {active_logins or '(none)'}")
+
+            # Also accept accounts connected in mt5_manager even if not in DB
+            for login in mt5_manager.sessions:
+                active_logins.add(str(login))
+            logger.info(f"📋 Active accounts (DB + MT5 manager): {active_logins or '(none)'}")
             
             # Fetch all enabled symbols across all accounts
             response = self.supabase_client.table('watchlist').select('*').eq('algo_enabled', True).execute()
+            logger.info(f"📋 Watchlist rows with algo_enabled=True: {len(response.data) if response.data else 0}")
+            for item in (response.data or []):
+                logger.info(f"   Row: symbol={item.get('symbol')} account_id={item.get('account_id')} algo_enabled={item.get('algo_enabled')}")
             
             # Group by account_id to track accounts and their enabled symbols
             accounts_symbols = {}
             
-            for item in response.data:
+            for item in (response.data or []):
                 symbol = item['symbol']
                 account_id = item['account_id']
                 
                 # Skip symbols belonging to inactive/disconnected accounts
                 if str(account_id) not in active_logins:
+                    logger.warning(
+                        f"⚠️ Skipping {symbol} (account_id={account_id}) — not in active_logins {active_logins}. "
+                        f"Add account to MT5 or mark as active in Supabase."
+                    )
                     continue
                 
                 # Create key combining account and symbol for unique tracking
