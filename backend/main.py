@@ -81,15 +81,33 @@ async def startup_event():
                 mt5_manager.add_account(settings.MT5_LOGIN, settings.MT5_PASSWORD, settings.MT5_SERVER)
                 logger.info(f"Added default account {settings.MT5_LOGIN} from environment")
 
-        # Connect MT5 accounts in a background thread so the HTTP server starts immediately.
-        # run_in_executor returns a Future, not a coroutine — use ensure_future, not create_task.
+        # Connect MT5 in background, then update DB status and reload auto-trader watchlist.
         if mt5_manager.sessions:
             logger.info(f"Starting MT5 connection for {len(mt5_manager.sessions)} account(s) in background...")
             loop = asyncio.get_event_loop()
-            asyncio.ensure_future(
-                loop.run_in_executor(None, lambda: mt5_manager.connect_all(max_retries=3))
-            )
-        
+
+            async def connect_then_sync():
+                await loop.run_in_executor(None, lambda: mt5_manager.connect_all(max_retries=3))
+                for login, session in mt5_manager.sessions.items():
+                    try:
+                        if getattr(session, 'connected', False):
+                            supabase_client.table('accounts').update({'status': 'active'}).eq('login', login).execute()
+                            logger.info(f"Account {login} marked active in DB")
+                        else:
+                            logger.info(f"Account {login} did not connect — stays pending")
+                    except Exception as db_err:
+                        logger.warning(f"Could not update account {login} status: {db_err}")
+                try:
+                    from backend.services.auto_trader import get_auto_trader_instance
+                    instance = get_auto_trader_instance()
+                    if instance and instance.is_running:
+                        await instance.load_watchlist()
+                        logger.info("Auto-trader watchlist reloaded after MT5 connect")
+                except Exception as reload_err:
+                    logger.warning(f"Could not reload watchlist after MT5 connect: {reload_err}")
+
+            asyncio.ensure_future(connect_then_sync())
+
         # Start auto-trading service in background (auto_trader.start() waits 8s for MT5 to connect)
         logger.info("Starting auto-trading service...")
         await start_auto_trading()
