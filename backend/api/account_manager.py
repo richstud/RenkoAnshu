@@ -63,14 +63,14 @@ async def connect_account(request: ConnectAccountRequest):
         # Step 2: Register in MT5 manager
         mt5_manager.add_account(request.login, request.password, request.server)
 
-        # Step 3: Try MT5 verify with 10s timeout (shorter — MT5 may be busy)
+        # Step 3: Try MT5 verify with 30s timeout (new accounts need more time for fresh login)
         mt5_verified = False
         try:
             connected = await asyncio.wait_for(
                 asyncio.get_event_loop().run_in_executor(
-                    None, lambda: mt5_manager.connect_account(request.login, max_retries=1)
+                    None, lambda: mt5_manager.connect_account(request.login, max_retries=3)
                 ),
-                timeout=10.0
+                timeout=30.0
             )
             if connected:
                 account_info = mt5_manager.get_account_info(request.login)

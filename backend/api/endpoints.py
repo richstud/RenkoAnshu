@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from backend.services.price_manager import price_manager
 from backend.services.watchlist_manager import watchlist_manager
+from backend.services.auto_trader import get_auto_trader_instance
 from backend.supabase.client import supabase_client
 
 logger = logging.getLogger("endpoints")
@@ -120,8 +121,8 @@ _DEFAULT_SYMBOLS = [
     {"id": 10, "symbol": "ETHUSD", "description": "Ethereum vs USD", "pip_value": 0.1, "is_active": True},
 ]
 
-# Broker suffix aliases — XM uses '#' for CFDs/crypto, '.i#' for precious metals (GOLD.i#)
-_BROKER_SUFFIX_ALIASES = [".i#", "#", ".", "+", "m"]
+# Broker suffix aliases — XM uses '#' for CFD/crypto instruments
+_BROKER_SUFFIX_ALIASES = ["#", ".", "+", "m"]
 
 
 @router.get("/tickers")
@@ -302,6 +303,11 @@ async def add_to_watchlist(item: WatchlistItem):
         if not result:
             raise HTTPException(status_code=400, detail="Failed to add to watchlist")
         
+        # Trigger immediate reload so new symbol is picked up without waiting 30s
+        trader = get_auto_trader_instance()
+        if trader:
+            import asyncio
+            asyncio.create_task(trader.load_watchlist())
         return {
             "message": f"Added {item.symbol} to watchlist",
             "data": result

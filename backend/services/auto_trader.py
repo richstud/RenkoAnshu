@@ -76,8 +76,8 @@ class AutoTrader:
                 logger.warning("Supabase client not initialized")
                 return
             
-            # Get active account logins so we skip disconnected accounts
-            active_accounts_res = self.supabase_client.table('accounts').select('login').eq('status', 'active').execute()
+            # Get active/pending account logins (pending = not yet connected to MT5 at startup)
+            active_accounts_res = self.supabase_client.table('accounts').select('login').in_('status', ['active', 'pending']).execute()
             active_logins = {str(row['login']) for row in (active_accounts_res.data or [])}
             logger.info(f"📋 Active accounts in DB: {active_logins or '(none)'}")
 
@@ -86,10 +86,10 @@ class AutoTrader:
                 active_logins.add(str(login))
             logger.info(f"📋 Active accounts (DB + MT5 manager): {active_logins or '(none)'}")
             
-            # Fetch all active symbols across all accounts
-            # Use is_active=True as primary filter; algo_enabled=False means user disabled trading for that symbol
-            response = self.supabase_client.table('watchlist').select('*').eq('is_active', True).execute()
-            logger.info(f"📋 Watchlist rows with is_active=True: {len(response.data) if response.data else 0}")
+            # Accept is_active=True OR NULL — rows inserted before column was backfilled have NULL.
+            # Only skip rows where is_active is explicitly False.
+            response = self.supabase_client.table('watchlist').select('*').neq('is_active', False).execute()
+            logger.info(f"📋 Watchlist rows (is_active != False): {len(response.data) if response.data else 0}")
             for item in (response.data or []):
                 logger.info(f"   Row: symbol={item.get('symbol')} account_id={item.get('account_id')} algo_enabled={item.get('algo_enabled')} is_active={item.get('is_active')}")
             
@@ -741,3 +741,8 @@ async def stop_auto_trading():
     if auto_trader:
         await auto_trader.stop()
         logger.info("🤖 Auto-Trading service stopped")
+
+
+def get_auto_trader_instance():
+    """Synchronous getter for the global auto-trader (use in non-async contexts)."""
+    return auto_trader

@@ -39,7 +39,9 @@ class WatchlistManager:
                 "algo_enabled": algo_enabled,
             }
             
-            result = supabase_client.table("watchlist").insert(data).execute()
+            # Upsert so re-adding an existing (account_id, symbol) simply refreshes its settings
+            # instead of throwing a unique-constraint violation.
+            result = supabase_client.table("watchlist").upsert(data, on_conflict="account_id,symbol").execute()
             
             if result.data:
                 logger.info(f"Added {symbol} to watchlist for account {account_id}")

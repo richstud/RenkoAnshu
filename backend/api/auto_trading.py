@@ -123,7 +123,7 @@ async def list_auto_trading_symbols():
                 "symbol": symbol,
                 "account_id": config['account_id'],
                 "brick_size": config['brick_size'],
-                "enabled": config['enabled'],
+                "enabled": config.get('algo_enabled', True),
                 "current_position": {
                     "direction": pos['direction'] if pos else None,
                     "entry_price": pos['entry_price'] if pos else None,
