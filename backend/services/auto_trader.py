@@ -39,12 +39,9 @@ class AutoTrader:
         try:
             logger.info("🤖 Initializing Auto-Trader Service...")
             
-            # Initialize Supabase client
-            from supabase import create_client
-            self.supabase_client = create_client(
-                settings.SUPABASE_URL,
-                settings.SUPABASE_KEY
-            )
+            # Use shared service-role client (bypasses RLS — anon key returns empty rows)
+            from backend.supabase.client import supabase_client
+            self.supabase_client = supabase_client
             
             # Load enabled symbols from database
             await self.load_watchlist()
