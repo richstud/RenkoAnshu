@@ -613,11 +613,33 @@ class AutoTrader:
             logger.error(f"❌ Error closing position: {e}")
     
     async def log_trade(self, symbol: str, direction: str, entry_price: float, lot_size: float, account_id: int):
-        """Log trade to Supabase"""
+        """Log trade to Supabase (with duplicate guard)"""
         try:
             if not self.supabase_client:
                 return
-            
+
+            # Duplicate guard: skip if same symbol+direction+account already has an open
+            # (exit_time IS NULL) row within the last 5 minutes. Prevents double-entries
+            # when the bot restarts mid-brick or fires the same brick signal twice.
+            cutoff = (datetime.utcnow() - timedelta(minutes=5)).isoformat()
+            existing = (
+                self.supabase_client
+                .table('auto_trading_history')
+                .select('id')
+                .eq('account_id', account_id)
+                .eq('symbol', symbol)
+                .eq('direction', direction)
+                .is_('exit_time', 'null')
+                .gte('entry_time', cutoff)
+                .execute()
+            )
+            if existing.data:
+                logger.info(
+                    f"⏭️ Skipping duplicate {direction} log for {symbol} "
+                    f"(open trade already recorded within last 5 min)"
+                )
+                return
+
             self.supabase_client.table('auto_trading_history').insert({
                 'account_id': account_id,
                 'symbol': symbol,
