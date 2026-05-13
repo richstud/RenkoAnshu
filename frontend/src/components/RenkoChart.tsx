@@ -52,6 +52,7 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
   const crosshairPriceRef = useRef<number | null>(null);
   const crosshairTimeRef = useRef<number | null>(null); // Unix timestamp at crosshair X position
   const showCrosshairRef = useRef<boolean>(false);
+  const pendingOrdersRef = useRef<{symbol: string; direction: string; limit_price: number; elapsed_s: number}[]>([]);
   const [symbolSearch, setSymbolSearch] = useState<string>('');
   const [showDropdown, setShowDropdown] = useState<boolean>(false);
   const [addedToWatchlist, setAddedToWatchlist] = useState<string | null>(null);
@@ -317,6 +318,61 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
         ctx.strokeRect(xStart, bodyTop, brickWidth, bodyHeight);
       });
 
+      // ===== Draw Pending Limit Orders =====
+      for (const order of pendingOrdersRef.current) {
+        const y = priceToY(order.limit_price);
+        const isBuy = order.direction === 'BUY';
+        const lineColor = isBuy ? '#22d3ee' : '#f97316'; // cyan=BUY, orange=SELL
+        const elapsed = order.elapsed_s;
+        const pct = Math.min(elapsed / 60, 1);
+
+        // Dashed horizontal line across full chart
+        ctx.save();
+        ctx.strokeStyle = lineColor;
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([6, 4]);
+        ctx.globalAlpha = 0.9;
+        ctx.beginPath();
+        ctx.moveTo(leftPadding, y);
+        ctx.lineTo(width - rightPadding, y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.globalAlpha = 1;
+
+        // Price tag on right
+        const priceTag = order.limit_price.toFixed(order.limit_price < 100 ? 3 : 2);
+        const tagW = 72;
+        ctx.fillStyle = lineColor;
+        ctx.fillRect(width - rightPadding + 2, y - 11, tagW, 22);
+        ctx.fillStyle = '#000';
+        ctx.font = 'bold 10px "Segoe UI", Arial';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(`${isBuy ? 'BUY' : 'SELL'} ${priceTag}`, width - rightPadding + 2 + tagW / 2, y);
+
+        // 60s confirmation timer bar on left margin
+        const barH = 6;
+        const barW = 60;
+        const barX = leftPadding - barW - 14;
+        const barY = y - barH / 2;
+        ctx.fillStyle = '#1e293b';
+        ctx.fillRect(barX, barY, barW, barH);
+        ctx.fillStyle = lineColor;
+        ctx.fillRect(barX, barY, barW * pct, barH);
+        ctx.strokeStyle = lineColor;
+        ctx.lineWidth = 0.8;
+        ctx.strokeRect(barX, barY, barW, barH);
+
+        // Timer label
+        const remaining = Math.max(0, Math.ceil(60 - elapsed));
+        ctx.fillStyle = lineColor;
+        ctx.font = '9px "Segoe UI", Arial';
+        ctx.textAlign = 'right';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(`${remaining}s`, barX - 3, y);
+        ctx.restore();
+      }
+
       // ===== Draw Info =====
       const lastBrick = bricks[bricks.length - 1];
       const isBullish = lastBrick.color === 'green';
@@ -448,6 +504,25 @@ export default function RenkoChart({ symbol: initialSymbol, brickSize: initialBr
     const animationFrame = setInterval(drawChart, 100);
     return () => clearInterval(animationFrame);
   }, [symbol, loading, chartData.brick_size, chartData.total_bricks]);
+
+  // Poll pending limit-order signals every 5s to show on chart
+  useEffect(() => {
+    const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+    const fetch_signals = async () => {
+      try {
+        const res = await fetch(`${API_URL}/api/auto-trading/pending-signals`);
+        if (res.ok) {
+          const data = await res.json();
+          pendingOrdersRef.current = (data.signals || []).filter(
+            (s: any) => s.symbol === symbol || s.symbol_key?.includes(symbol)
+          );
+        }
+      } catch { /* ignore */ }
+    };
+    fetch_signals();
+    const timer = setInterval(fetch_signals, 5000);
+    return () => clearInterval(timer);
+  }, [symbol]);
 
   // Mouse movement handler for crosshair — uses polling to attach once canvas is available
   useEffect(() => {

@@ -4,6 +4,7 @@ API endpoints for automated trading control
 from fastapi import APIRouter, HTTPException
 from backend.services.auto_trader import get_auto_trader
 import logging
+import time
 import asyncio
 
 logger = logging.getLogger(__name__)
@@ -258,3 +259,34 @@ async def close_auto_trading_position(symbol: str):
     except Exception as e:
         logger.error(f"Error closing position: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/pending-signals")
+async def get_pending_signals():
+    """Return all active pending limit-order signals so the frontend can draw them on the chart."""
+    try:
+        from backend.services.auto_trader import get_auto_trader_instance
+        instance = get_auto_trader_instance()
+        if not instance:
+            return {"signals": []}
+
+        now = time.time()
+        signals = []
+        for symbol_key, signal in instance.pending_signals.items():
+            if signal.get("violated") or signal.get("order_placed"):
+                continue
+            cfg = instance.enabled_symbols.get(symbol_key, {})
+            signals.append({
+                "symbol_key": symbol_key,
+                "symbol": cfg.get("symbol", symbol_key.split("_", 1)[-1] if "_" in symbol_key else symbol_key),
+                "account_id": cfg.get("account_id"),
+                "direction": signal.get("direction"),
+                "limit_price": signal.get("limit_price"),
+                "elapsed_s": round(now - signal.get("start_time", now), 1),
+                "confirmed": (now - signal.get("start_time", now)) >= 60,
+                "order_ticket": signal.get("order_ticket"),
+            })
+        return {"signals": signals}
+    except Exception as e:
+        logger.error(f"Error getting pending signals: {e}")
+        return {"signals": []}
