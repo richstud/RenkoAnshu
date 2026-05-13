@@ -39,12 +39,9 @@ class AutoTrader:
         try:
             logger.info("🤖 Initializing Auto-Trader Service...")
             
-            # Initialize Supabase client
-            from supabase import create_client
-            self.supabase_client = create_client(
-                settings.SUPABASE_URL,
-                settings.SUPABASE_KEY
-            )
+            # Use shared service-role client (bypasses RLS)
+            from backend.supabase.client import supabase_client as _shared_client
+            self.supabase_client = _shared_client
             
             # Load enabled symbols from database
             await self.load_watchlist()
@@ -77,7 +74,7 @@ class AutoTrader:
                 return
             
             # Get active account logins so we skip disconnected accounts
-            active_accounts_res = self.supabase_client.table('accounts').select('login').eq('status', 'active').execute()
+            active_accounts_res = self.supabase_client.table('accounts').select('login').neq('status', 'inactive').execute()
             active_logins = {str(row['login']) for row in (active_accounts_res.data or [])}
             logger.info(f"📋 Active accounts in DB: {active_logins or '(none)'}")
 
@@ -88,7 +85,7 @@ class AutoTrader:
             
             # Fetch all active symbols across all accounts
             # Use is_active=True as primary filter; algo_enabled=False means user disabled trading for that symbol
-            response = self.supabase_client.table('watchlist').select('*').eq('is_active', True).execute()
+            response = self.supabase_client.table('watchlist').select('*').neq('is_active', False).execute()
             logger.info(f"📋 Watchlist rows with is_active=True: {len(response.data) if response.data else 0}")
             for item in (response.data or []):
                 logger.info(f"   Row: symbol={item.get('symbol')} account_id={item.get('account_id')} algo_enabled={item.get('algo_enabled')} is_active={item.get('is_active')}")
