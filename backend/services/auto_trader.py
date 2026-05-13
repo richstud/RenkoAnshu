@@ -739,6 +739,11 @@ async def start_auto_trading():
     logger.info("🤖 Auto-Trading service started in background")
 
 
+
+
+def get_auto_trader_instance() -> Optional['AutoTrader']:
+    """Synchronous getter for the global auto-trader instance."""
+    return auto_trader
 async def stop_auto_trading():
     """Stop the auto-trading service (call from FastAPI shutdown)"""
     global auto_trader
