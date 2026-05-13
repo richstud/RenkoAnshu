@@ -39,9 +39,12 @@ class AutoTrader:
         try:
             logger.info("🤖 Initializing Auto-Trader Service...")
             
-            # Use shared service-role client (bypasses RLS — anon key returns empty rows)
-            from backend.supabase.client import supabase_client
-            self.supabase_client = supabase_client
+            # Initialize Supabase client
+            from supabase import create_client
+            self.supabase_client = create_client(
+                settings.SUPABASE_URL,
+                settings.SUPABASE_KEY
+            )
             
             # Load enabled symbols from database
             await self.load_watchlist()
@@ -73,8 +76,8 @@ class AutoTrader:
                 logger.warning("Supabase client not initialized")
                 return
             
-            # Get active/pending account logins (pending = not yet connected to MT5 at startup)
-            active_accounts_res = self.supabase_client.table('accounts').select('login').in_('status', ['active', 'pending']).execute()
+            # Get active account logins so we skip disconnected accounts
+            active_accounts_res = self.supabase_client.table('accounts').select('login').eq('status', 'active').execute()
             active_logins = {str(row['login']) for row in (active_accounts_res.data or [])}
             logger.info(f"📋 Active accounts in DB: {active_logins or '(none)'}")
 
@@ -83,10 +86,10 @@ class AutoTrader:
                 active_logins.add(str(login))
             logger.info(f"📋 Active accounts (DB + MT5 manager): {active_logins or '(none)'}")
             
-            # Accept is_active=True OR NULL — rows inserted before column was backfilled have NULL.
-            # Only skip rows where is_active is explicitly False.
-            response = self.supabase_client.table('watchlist').select('*').neq('is_active', False).execute()
-            logger.info(f"📋 Watchlist rows (is_active != False): {len(response.data) if response.data else 0}")
+            # Fetch all active symbols across all accounts
+            # Use is_active=True as primary filter; algo_enabled=False means user disabled trading for that symbol
+            response = self.supabase_client.table('watchlist').select('*').eq('is_active', True).execute()
+            logger.info(f"📋 Watchlist rows with is_active=True: {len(response.data) if response.data else 0}")
             for item in (response.data or []):
                 logger.info(f"   Row: symbol={item.get('symbol')} account_id={item.get('account_id')} algo_enabled={item.get('algo_enabled')} is_active={item.get('is_active')}")
             
@@ -281,10 +284,10 @@ class AutoTrader:
 
         if new_rates:
             for rate in new_rates:
-                renko.feed_tick(rate['close'])
+                renko.feed_tick(rate['close'], int(rate['time']))
             self.last_candle_times[engine_key] = max(int(r['time']) for r in new_rates)
 
-        all_bricks = renko.history(10)
+        all_bricks = renko.bricks  # full history needed to find first brick of new color
         if len(all_bricks) == 0:
             logger.info(f"⏳ [{symbol}] No bricks yet (brick_size={brick_size})")
             return None
@@ -308,7 +311,11 @@ class AutoTrader:
         # ── BRICK CHANGE: new brick formed ────────────────────────────────────
         if last_color != current_color:
             new_direction = 'BUY' if current_color == 'green' else 'SELL'
-            limit_price = current_brick.close_price  # green close = open+brick_size; red close = open-brick_size
+            first_new_idx = len(all_bricks) - 1
+            while first_new_idx > 0 and all_bricks[first_new_idx - 1].color == current_color:
+                first_new_idx -= 1
+            first_brick = all_bricks[first_new_idx]
+            limit_price = first_brick.close_price  # close of first new-direction brick
 
             # Cancel any existing pending limit order for this symbol
             existing = self.pending_signals.get(symbol_key, {})
@@ -322,7 +329,7 @@ class AutoTrader:
             self.pending_signals[symbol_key] = {
                 'direction': new_direction,
                 'limit_price': limit_price,
-                'start_time': time.time(),
+                'start_time': float(first_brick.timestamp) if first_brick.timestamp else time.time(),
                 'violated': False,
                 'order_placed': False,
                 'order_ticket': None,
@@ -613,33 +620,11 @@ class AutoTrader:
             logger.error(f"❌ Error closing position: {e}")
     
     async def log_trade(self, symbol: str, direction: str, entry_price: float, lot_size: float, account_id: int):
-        """Log trade to Supabase (with duplicate guard)"""
+        """Log trade to Supabase"""
         try:
             if not self.supabase_client:
                 return
-
-            # Duplicate guard: skip if same symbol+direction+account already has an open
-            # (exit_time IS NULL) row within the last 5 minutes. Prevents double-entries
-            # when the bot restarts mid-brick or fires the same brick signal twice.
-            cutoff = (datetime.utcnow() - timedelta(minutes=5)).isoformat()
-            existing = (
-                self.supabase_client
-                .table('auto_trading_history')
-                .select('id')
-                .eq('account_id', account_id)
-                .eq('symbol', symbol)
-                .eq('direction', direction)
-                .is_('exit_time', 'null')
-                .gte('entry_time', cutoff)
-                .execute()
-            )
-            if existing.data:
-                logger.info(
-                    f"⏭️ Skipping duplicate {direction} log for {symbol} "
-                    f"(open trade already recorded within last 5 min)"
-                )
-                return
-
+            
             self.supabase_client.table('auto_trading_history').insert({
                 'account_id': account_id,
                 'symbol': symbol,
@@ -760,8 +745,3 @@ async def stop_auto_trading():
     if auto_trader:
         await auto_trader.stop()
         logger.info("🤖 Auto-Trading service stopped")
-
-
-def get_auto_trader_instance():
-    """Synchronous getter for the global auto-trader (use in non-async contexts)."""
-    return auto_trader
