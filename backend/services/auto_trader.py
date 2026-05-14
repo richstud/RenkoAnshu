@@ -17,6 +17,24 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+_BROKER_ALIASES = {
+    'GOLD':   ['XAUUSD', 'XAUUSD#', 'XAUUSDm', 'GOLD#', 'GOLD.', 'GOLD'],
+    'SILVER': ['XAGUSD', 'XAGUSD#', 'XAGUSDm', 'SILVER#', 'SILVER'],
+    'OIL':    ['USOIL',  'USOIL#',  'WTI',     'OIL#',  'OIL'],
+    'NATGAS': ['NATGAS', 'NATGAS#', 'NGAS'],
+}
+_DEFAULT_SUFFIXES = ['', '#', '.', 'm', '+']
+
+
+def _resolve_broker_symbol(symbol):
+    """Try alias list first (e.g. GOLD -> XAUUSD on XM), then suffix variants."""
+    candidates = _BROKER_ALIASES.get(symbol.upper(), [symbol + s for s in _DEFAULT_SUFFIXES])
+    for cand in candidates:
+        if mt5.symbol_select(cand, True) and mt5.symbol_info(cand) is not None:
+            return cand
+    return None
+
+
 class AutoTrader:
     """Background service for automated trading based on Renko strategy"""
     
@@ -276,19 +294,12 @@ class AutoTrader:
         symbol = config['symbol']
         brick_size = config.get('brick_size', 1.0)
 
-        # Resolve broker symbol alias (XM uses GOLD#, ETHUSD#, BTCUSD# etc.)
-        _SUFFIXES = ["", "#", ".", "m", "+"]
-        resolved_symbol = None
-        for sfx in _SUFFIXES:
-            candidate = symbol + sfx
-            if mt5.symbol_select(candidate, True):
-                if mt5.symbol_info(candidate) is not None:
-                    resolved_symbol = candidate
-                    break
+        # Resolve broker symbol (e.g. GOLD -> XAUUSD on XM broker)
+        resolved_symbol = _resolve_broker_symbol(symbol)
         if resolved_symbol is None:
             err = mt5.last_error()
             logger.warning(
-                f"[{symbol}] Cannot select symbol in Market Watch (tried suffixes {_SUFFIXES}): "
+                f"[{symbol}] Cannot resolve symbol in Market Watch: "
                 f"MT5 error={err}. Is MT5 terminal running and logged in?"
             )
             return None
@@ -374,36 +385,39 @@ class AutoTrader:
             # Fix: use the latest M1 candle's time as the MT5 "now" reference (same timezone).
             # Then compute how many seconds ago the brick formed (all in broker time),
             # and subtract that from the current wall-clock to get wall_start.
-            mt5_now = int(rates_sorted[-1]['time']) + 60  # +60: last candle covers [time, time+60s)
-            brick_ts = float(first_brick.timestamp) if first_brick.timestamp else float(mt5_now)
-            signal_age_secs = max(0.0, float(mt5_now) - brick_ts)  # seconds since brick formed
-            wall_start = time.time() - signal_age_secs  # wall-clock when brick actually formed
+            mt5_now = int(rates_sorted[-1]['time']) + 60
+            brick_ts = float(first_brick.timestamp) if first_brick.timestamp else float(mt5_now - 60)
+            # Brick completes when its M1 candle closes: brick_ts + 60s
+            brick_complete_ts = brick_ts + 60.0
+            signal_age_secs = max(0.0, float(mt5_now) - brick_complete_ts)
+            wall_start = time.time() - signal_age_secs
 
             logger.info(
                 f"[{symbol}] New signal: mt5_now={mt5_now}, brick_ts={int(brick_ts)}, "
                 f"age={signal_age_secs:.0f}s, wall_start=t-{signal_age_secs:.0f}s"
             )
 
-            # Historical violation check: scan M1 candles within the first 60s of the signal.
-            # Use broker timestamps throughout (window start = brick_ts, window end = brick_ts+60).
-            window_end_mt5 = brick_ts + 60.0
+            # Historical check: scan M1 candles AFTER brick completes (skip brick own candle).
+            # BUY: violated if any candle LOW < limit_price. SELL: violated if HIGH > limit_price.
+            window_start_mt5 = brick_complete_ts
+            window_end_mt5 = brick_complete_ts + 60.0
             historically_violated = False
             for r in rates_sorted:
                 r_time = int(r['time'])
-                if r_time < int(brick_ts) or r_time > int(window_end_mt5):
+                if r_time < int(window_start_mt5) or r_time > int(window_end_mt5):
                     continue
-                if new_direction == 'SELL' and float(r['high']) > limit_price:
-                    historically_violated = True
-                    logger.info(
-                        f"⚠️ [{symbol}] SELL signal violated in history "
-                        f"(candle high {r['high']} > limit {limit_price}) — skipping"
-                    )
-                    break
                 if new_direction == 'BUY' and float(r['low']) < limit_price:
                     historically_violated = True
                     logger.info(
-                        f"⚠️ [{symbol}] BUY signal violated in history "
-                        f"(candle low {r['low']} < limit {limit_price}) — skipping"
+                        f"[{symbol}] BUY violated in history "
+                        f"(candle low {r['low']} < limit {limit_price}) -- skipping"
+                    )
+                    break
+                if new_direction == 'SELL' and float(r['high']) > limit_price:
+                    historically_violated = True
+                    logger.info(
+                        f"[{symbol}] SELL violated in history "
+                        f"(candle high {r['high']} > limit {limit_price}) -- skipping"
                     )
                     break
 
@@ -411,27 +425,25 @@ class AutoTrader:
                 self.last_brick_state[symbol_key] = current_color
                 return None
 
-            # Cancel any existing pending limit order for this symbol
+            # Cancel any existing pending order and close any opposite open position
             existing = self.pending_signals.get(symbol_key, {})
             if existing.get('order_ticket'):
                 self._cancel_pending_order_sync(symbol, account_id, existing['order_ticket'])
+            self._close_opposite_position_sync(resolved_symbol, account_id)
 
-            # Close any open position in the opposite direction
-            self._close_opposite_position_sync(symbol, account_id)
-
-            # Start new 60-second confirmation window
-            # violation_price = open of first new-direction brick (the reversal level).
-            # For SELL: red brick open is the HIGH (where reversal started) —
-            #   if price goes back above that, the reversal is fake.
-            # For BUY: green brick open is the LOW — if price drops below that, fake.
+            # Start 60s confirmation window.
+            # violation_price = limit_price = brick CLOSE.
+            # BUY ($100->$102): cancel if price falls BELOW $102.
+            # SELL ($108->$106): cancel if price rises ABOVE $106.
             self.pending_signals[symbol_key] = {
                 'direction': new_direction,
                 'limit_price': limit_price,
-                'violation_price': float(first_brick.open_price),
-                'start_time': wall_start,  # wall-clock (UTC) when brick formed
+                'violation_price': limit_price,
+                'start_time': wall_start,
                 'violated': False,
                 'order_placed': False,
                 'order_ticket': None,
+                'resolved_symbol': resolved_symbol,
             }
             logger.info(
                 f"📊 [{symbol}] Brick: {last_color}→{current_color} | "
