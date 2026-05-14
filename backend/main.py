@@ -94,7 +94,11 @@ async def startup_event():
                             supabase_client.table('accounts').update({'status': 'active'}).eq('login', login).execute()
                             logger.info(f"Account {login} marked active in DB")
                         else:
-                            logger.info(f"Account {login} did not connect — stays pending")
+                            logger.info(f"Account {login} did not connect — marking pending in DB")
+                            try:
+                                supabase_client.table('accounts').update({'status': 'pending'}).eq('login', login).execute()
+                            except Exception as _upd_err:
+                                logger.warning(f"Could not mark {login} pending: {_upd_err}")
                     except Exception as db_err:
                         logger.warning(f"Could not update account {login} status: {db_err}")
                 try:
