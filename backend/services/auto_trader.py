@@ -295,8 +295,22 @@ class AutoTrader:
 
         if last_color is None:
             if len(all_bricks) >= 2:
-                last_color = all_bricks[-2].color
-                logger.info(f"📊 [{symbol}] Initialized: prev={last_color}, current={current_color}")
+                # Walk backwards to find the most recent brick whose color differs
+                # from the current streak so the bot picks up an in-progress trend
+                # immediately on startup instead of waiting for the next flip.
+                prev_color = None
+                for i in range(len(all_bricks) - 2, -1, -1):
+                    if all_bricks[i].color != current_color:
+                        prev_color = all_bricks[i].color
+                        break
+                if prev_color is None:
+                    # All history is same color — nothing to act on yet
+                    self.last_brick_state[symbol_key] = current_color
+                    return None
+                last_color = prev_color
+                logger.info(
+                    f"📊 [{symbol}] Startup: detected {prev_color}→{current_color} trend in history"
+                )
             else:
                 self.last_brick_state[symbol_key] = current_color
                 return None
@@ -313,6 +327,35 @@ class AutoTrader:
                 first_new_idx -= 1
             first_brick = all_bricks[first_new_idx]
             limit_price = first_brick.close_price  # close of first new-direction brick
+            # 60-second window starts at the MOMENT the first new-direction brick formed
+            signal_start = float(first_brick.timestamp) if first_brick.timestamp else time.time()
+
+            # When the bot starts mid-trend, check historical M1 candles to see if
+            # price violated the limit during the first 60s — if so, skip this signal.
+            window_end = min(time.time(), signal_start + 60.0)
+            historically_violated = False
+            for r in rates_sorted:
+                r_time = int(r['time'])
+                if r_time < int(signal_start) or r_time > int(window_end):
+                    continue
+                if new_direction == 'SELL' and float(r['high']) > limit_price:
+                    historically_violated = True
+                    logger.info(
+                        f"⚠️ [{symbol}] SELL signal violated in history "
+                        f"(candle high {r['high']} > limit {limit_price}) — skipping"
+                    )
+                    break
+                if new_direction == 'BUY' and float(r['low']) < limit_price:
+                    historically_violated = True
+                    logger.info(
+                        f"⚠️ [{symbol}] BUY signal violated in history "
+                        f"(candle low {r['low']} < limit {limit_price}) — skipping"
+                    )
+                    break
+
+            if historically_violated:
+                self.last_brick_state[symbol_key] = current_color
+                return None
 
             # Cancel any existing pending limit order for this symbol
             existing = self.pending_signals.get(symbol_key, {})
@@ -326,7 +369,7 @@ class AutoTrader:
             self.pending_signals[symbol_key] = {
                 'direction': new_direction,
                 'limit_price': limit_price,
-                'start_time': float(first_brick.timestamp) if first_brick.timestamp else time.time(),
+                'start_time': signal_start,
                 'violated': False,
                 'order_placed': False,
                 'order_ticket': None,
