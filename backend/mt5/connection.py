@@ -1,4 +1,5 @@
 import logging
+import threading
 import time
 from typing import Dict, Optional
 
@@ -127,6 +128,10 @@ class AccountSession:
             raise
 
 
+# Global lock — MT5 is NOT thread-safe. All MT5 calls must be
+# serialized to prevent 'No M1 rate data' / IPC corruption.
+mt5_lock = threading.Lock()
+
 class MT5Manager:
     def __init__(self):
         self.sessions: Dict[int, AccountSession] = {}
@@ -141,16 +146,18 @@ class MT5Manager:
             session.disconnect()
 
     def connect_all(self, max_retries: int = 5):
-        """Connect all accounts - Initialize MT5 ONCE, then login each account sequentially
-        
+        """Connect all accounts - Initialize MT5 ONCE, then login each account sequentially.
+        Holds mt5_lock to prevent race with the signal evaluation thread.
         Args:
             max_retries: Maximum retry attempts per account
         """
-        if not self.sessions:
+        mt5_lock.acquire()  # Block signal evaluation while we (re)initialize MT5
+        try:
+          if not self.sessions:
             logger.warning("No accounts to connect")
             return
-        
-        # Step 1: Initialize MT5 ONCE at manager level (not per account)
+          
+          # Step 1: Initialize MT5 ONCE at manager level (not per account)
         if not self.mt5_initialized:
             logger.info("🔧 Initializing MT5 library (global)...")
             for init_attempt in range(max_retries):
@@ -215,10 +222,12 @@ class MT5Manager:
         
         logger.info(f"📊 Connection summary: {successful_connections} succeeded, {len(failed_connections)} failed")
         
-        if failed_connections:
+          if failed_connections:
             logger.warning("Failed accounts:")
             for login, error in failed_connections:
                 logger.warning(f"  - Account {login}: {error}")
+        finally:
+            mt5_lock.release()
 
     def disconnect_all(self):
         """Disconnect all accounts and cleanup MT5"""

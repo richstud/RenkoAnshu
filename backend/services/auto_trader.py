@@ -11,7 +11,7 @@ import MetaTrader5 as mt5
 
 from backend.renko.engine import RenkoEngine
 from backend.strategy.engine import StrategyEngine
-from backend.mt5.connection import mt5_manager
+from backend.mt5.connection import mt5_manager, mt5_lock
 from backend.config import settings
 import httpx
 
@@ -207,9 +207,17 @@ class AutoTrader:
         Groups symbols by account to minimize mt5.login() calls (one per account switch).
         Returns list of {symbol, signal, entry_price, lot_size, account_id} dicts (limit orders placed).
         """
-        signals = []
+        # Acquire global MT5 lock — MT5 is NOT thread-safe. Without this,
+        # background connect_all() threads corrupt the session mid-evaluation
+        # causing copy_rates_from_pos to return None.
+        acquired = mt5_lock.acquire(timeout=3)
+        if not acquired:
+            logger.debug("MT5 lock busy (connect in progress) — skipping evaluation cycle")
+            return []
+        try:
+            signals = []
 
-        # Group by account_id to call switch_to() once per account
+            # Group by account_id to call switch_to() once per account
         by_account: Dict[int, list] = {}
         for symbol_key, config in list(self.enabled_symbols.items()):
             if not config.get('algo_enabled', False):
@@ -227,15 +235,13 @@ class AutoTrader:
             try:
                 session.switch_to()
             except Exception as e:
-                logger.warning(f"⚠️ Account {account_id} switch failed: {e} — attempting reconnect")
-                try:
-                    session.connect(max_retries=1)
-                    session.switch_to()
-                    logger.info(f"✅ Account {account_id} reconnected successfully")
-                except Exception as e2:
-                    logger.error(f"❌ Account {account_id} reconnect failed: {e2} — skipping")
-                    continue
+                # Do NOT attempt reconnect inline — connect_all() may be running in
+                # another thread and MT5 is not thread-safe. Concurrent mt5.login()
+                # calls corrupt the session and make copy_rates_from_pos return None.
+                logger.warning(f"⚠️ Account {account_id} not ready, skipping this cycle: {e}")
+                continue
             if not session.connected:
+                logger.warning(f"⚠️ Account {account_id} not connected, skipping")
                 continue
 
             for symbol_key, config in items:
@@ -246,7 +252,9 @@ class AutoTrader:
                 except Exception as e:
                     logger.error(f"❌ Error checking signal for {symbol_key}: {e}")
 
-        return signals
+            return signals
+        finally:
+            mt5_lock.release()
 
     def _check_signal_sync(self, symbol_key: str, config: dict, account_id: int) -> Optional[dict]:
         """
