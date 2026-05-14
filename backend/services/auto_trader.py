@@ -241,6 +241,19 @@ class AutoTrader:
                     logger.warning(f"Account {account_id} not connected, skipping")
                     continue
 
+                # Verify MT5 terminal IPC is actually live after switch_to().
+                # switch_to() skips mt5.login() if already on this account, so a
+                # crashed terminal won't raise an exception — catch it here.
+                if mt5.terminal_info() is None:
+                    err = mt5.last_error()
+                    logger.warning(
+                        f"Account {account_id}: MT5 terminal IPC broken (last_error={err}) — "
+                        f"forcing re-init on next connect cycle"
+                    )
+                    session.connected = False
+                    mt5_manager.mt5_initialized = False
+                    continue
+
                 for symbol_key, config in items:
                     try:
                         sig = self._check_signal_sync(symbol_key, config, account_id)
