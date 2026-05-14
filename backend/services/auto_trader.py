@@ -260,7 +260,7 @@ class AutoTrader:
 
         rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M1, 0, 100)
         if rates is None or len(rates) == 0:
-            logger.debug(f"⏳ No rate data yet for {symbol}")
+            logger.warning(f"[{symbol}] No M1 rate data from MT5 — MT5 may not be connected")
             return None
 
         engine_key = f"{account_id}_{symbol}_{brick_size}"
@@ -366,9 +366,14 @@ class AutoTrader:
             self._close_opposite_position_sync(symbol, account_id)
 
             # Start new 60-second confirmation window
+            # violation_price = open of first new-direction brick (the reversal level).
+            # For SELL: red brick open is the HIGH (where reversal started) —
+            #   if price goes back above that, the reversal is fake.
+            # For BUY: green brick open is the LOW — if price drops below that, fake.
             self.pending_signals[symbol_key] = {
                 'direction': new_direction,
                 'limit_price': limit_price,
+                'violation_price': float(first_brick.open_price),
                 'start_time': signal_start,
                 'violated': False,
                 'order_placed': False,
@@ -383,7 +388,14 @@ class AutoTrader:
 
         # ── CONFIRMATION CHECK ─────────────────────────────────────────────────
         pending = self.pending_signals.get(symbol_key)
-        if not pending or pending.get('order_placed') or pending.get('violated'):
+        if not pending:
+            logger.debug(f"[{symbol}] No pending signal active")
+            return None
+        if pending.get('order_placed'):
+            logger.debug(f"[{symbol}] Order already placed — done")
+            return None
+        if pending.get('violated'):
+            logger.debug(f"[{symbol}] Signal previously violated — skipping")
             return None
         if current_price is None:
             return None
@@ -391,15 +403,26 @@ class AutoTrader:
         direction = pending['direction']
         limit_price = pending['limit_price']
         elapsed = time.time() - pending['start_time']
+        logger.info(
+            f"[{symbol}] Confirming {direction} LIMIT @ {limit_price} | "
+            f"elapsed={elapsed:.1f}s | price={current_price}"
+        )
 
-        # If price crossed to the wrong side during the confirmation window → abort
-        if direction == 'BUY' and current_price < limit_price:
+        # If price crossed back through the reversal level → abort signal
+        # For SELL: violated if price rises ABOVE the open of first red brick (reversal high)
+        # For BUY:  violated if price drops BELOW the open of first green brick (reversal low)
+        violation_price = pending.get('violation_price', limit_price)
+        if direction == 'BUY' and current_price < violation_price:
             pending['violated'] = True
-            logger.info(f"⚠️ [{symbol}] BUY confirmation cancelled: price {current_price} dropped below {limit_price}")
+            logger.info(
+                f"⚠️ [{symbol}] BUY confirmation cancelled: price {current_price} dropped below reversal low {violation_price}"
+            )
             return None
-        if direction == 'SELL' and current_price > limit_price:
+        if direction == 'SELL' and current_price > violation_price:
             pending['violated'] = True
-            logger.info(f"⚠️ [{symbol}] SELL confirmation cancelled: price {current_price} rose above {limit_price}")
+            logger.info(
+                f"⚠️ [{symbol}] SELL confirmation cancelled: price {current_price} rose above reversal high {violation_price}"
+            )
             return None
 
         # Place limit order after 60 seconds of uninterrupted confirmation
