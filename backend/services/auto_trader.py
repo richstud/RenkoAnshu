@@ -273,7 +273,7 @@ class AutoTrader:
             err = mt5.last_error()
             logger.warning(
                 f"[{symbol}] No M1 rate data from MT5 "
-                f"(last_error={err}) — check symbol name and MT5 login"
+                f"(last_error={err}) - check symbol name and MT5 login"
             )
             return None
 
