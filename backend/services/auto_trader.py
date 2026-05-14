@@ -263,9 +263,18 @@ class AutoTrader:
         symbol = config['symbol']
         brick_size = config.get('brick_size', 1.0)
 
+        # Ensure symbol is in Market Watch — MT5 won't return data otherwise
+        if not mt5.symbol_select(symbol, True):
+            logger.warning(f"[{symbol}] Cannot select symbol in Market Watch: {mt5.last_error()}")
+            return None
+
         rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M1, 0, 100)
         if rates is None or len(rates) == 0:
-            logger.warning(f"[{symbol}] No M1 rate data from MT5 — MT5 may not be connected")
+            err = mt5.last_error()
+            logger.warning(
+                f"[{symbol}] No M1 rate data from MT5 "
+                f"(last_error={err}) — check symbol name and MT5 login"
+            )
             return None
 
         engine_key = f"{account_id}_{symbol}_{brick_size}"
