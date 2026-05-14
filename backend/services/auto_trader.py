@@ -206,10 +206,8 @@ class AutoTrader:
         """Synchronous signal collection - runs in thread pool.
         Groups symbols by account to minimize mt5.login() calls (one per account switch).
         Returns list of {symbol, signal, entry_price, lot_size, account_id} dicts (limit orders placed).
+        Holds mt5_lock for the full pass so connect_all() threads cannot corrupt MT5 mid-evaluation.
         """
-        # Acquire global MT5 lock — MT5 is NOT thread-safe. Without this,
-        # background connect_all() threads corrupt the session mid-evaluation
-        # causing copy_rates_from_pos to return None.
         acquired = mt5_lock.acquire(timeout=3)
         if not acquired:
             logger.debug("MT5 lock busy (connect in progress) — skipping evaluation cycle")
@@ -218,39 +216,38 @@ class AutoTrader:
             signals = []
 
             # Group by account_id to call switch_to() once per account
-        by_account: Dict[int, list] = {}
-        for symbol_key, config in list(self.enabled_symbols.items()):
-            if not config.get('algo_enabled', False):
-                continue
-            account_id = config['account_id']
-            if account_id not in by_account:
-                by_account[account_id] = []
-            by_account[account_id].append((symbol_key, config))
+            by_account: Dict[int, list] = {}
+            for symbol_key, config in list(self.enabled_symbols.items()):
+                if not config.get('algo_enabled', False):
+                    continue
+                account_id = config['account_id']
+                if account_id not in by_account:
+                    by_account[account_id] = []
+                by_account[account_id].append((symbol_key, config))
 
-        for account_id, items in by_account.items():
-            session = mt5_manager.get_session(account_id)
-            if not session:
-                logger.warning(f"⚠️ Account {account_id} not found in manager")
-                continue
-            try:
-                session.switch_to()
-            except Exception as e:
-                # Do NOT attempt reconnect inline — connect_all() may be running in
-                # another thread and MT5 is not thread-safe. Concurrent mt5.login()
-                # calls corrupt the session and make copy_rates_from_pos return None.
-                logger.warning(f"⚠️ Account {account_id} not ready, skipping this cycle: {e}")
-                continue
-            if not session.connected:
-                logger.warning(f"⚠️ Account {account_id} not connected, skipping")
-                continue
-
-            for symbol_key, config in items:
+            for account_id, items in by_account.items():
+                session = mt5_manager.get_session(account_id)
+                if not session:
+                    logger.warning(f"Account {account_id} not found in manager")
+                    continue
                 try:
-                    sig = self._check_signal_sync(symbol_key, config, account_id)
-                    if sig:
-                        signals.append(sig)
+                    session.switch_to()
                 except Exception as e:
-                    logger.error(f"❌ Error checking signal for {symbol_key}: {e}")
+                    # Do NOT reconnect inline — MT5 is not thread-safe and we already hold
+                    # the lock here, so a reconnect would deadlock with connect_all().
+                    logger.warning(f"Account {account_id} not ready, skipping this cycle: {e}")
+                    continue
+                if not session.connected:
+                    logger.warning(f"Account {account_id} not connected, skipping")
+                    continue
+
+                for symbol_key, config in items:
+                    try:
+                        sig = self._check_signal_sync(symbol_key, config, account_id)
+                        if sig:
+                            signals.append(sig)
+                    except Exception as e:
+                        logger.error(f"Error checking signal for {symbol_key}: {e}")
 
             return signals
         finally:
