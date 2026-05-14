@@ -276,17 +276,31 @@ class AutoTrader:
         symbol = config['symbol']
         brick_size = config.get('brick_size', 1.0)
 
-        # Ensure symbol is in Market Watch — MT5 won't return data otherwise
-        if not mt5.symbol_select(symbol, True):
-            logger.warning(f"[{symbol}] Cannot select symbol in Market Watch: {mt5.last_error()}")
+        # Resolve broker symbol alias (XM uses GOLD#, ETHUSD#, BTCUSD# etc.)
+        _SUFFIXES = ["", "#", ".", "m", "+"]
+        resolved_symbol = None
+        for sfx in _SUFFIXES:
+            candidate = symbol + sfx
+            if mt5.symbol_select(candidate, True):
+                if mt5.symbol_info(candidate) is not None:
+                    resolved_symbol = candidate
+                    break
+        if resolved_symbol is None:
+            err = mt5.last_error()
+            logger.warning(
+                f"[{symbol}] Cannot select symbol in Market Watch (tried suffixes {_SUFFIXES}): "
+                f"MT5 error={err}. Is MT5 terminal running and logged in?"
+            )
             return None
+        if resolved_symbol != symbol:
+            logger.info(f"[{symbol}] Resolved to broker symbol: {resolved_symbol}")
 
-        rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M1, 0, 100)
+        rates = mt5.copy_rates_from_pos(resolved_symbol, mt5.TIMEFRAME_M1, 0, 100)
         if rates is None or len(rates) == 0:
             err = mt5.last_error()
             logger.warning(
                 f"[{symbol}] No M1 rate data from MT5 "
-                f"(last_error={err}) - check symbol name and MT5 login"
+                f"(last_error={err}) - check MT5 login"
             )
             return None
 
@@ -343,7 +357,7 @@ class AutoTrader:
                 return None
 
         # Get live bid price for confirmation checks
-        tick = mt5.symbol_info_tick(symbol)
+        tick = mt5.symbol_info_tick(resolved_symbol)
         current_price = float(tick.bid) if tick else None
 
         # ── BRICK CHANGE: new brick formed ────────────────────────────────────
@@ -603,17 +617,30 @@ class AutoTrader:
         manual_lot = config.get('lot_size')
         lot_size = manual_lot if (manual_lot and manual_lot > 0) else self.calculate_lot_size(balance)
 
-        sym_info = mt5.symbol_info(symbol)
+        # Resolve broker alias (XM: GOLD#, ETHUSD#, etc.)
+        _SFXS = ["", "#", ".", "m", "+"]
+        res_sym = None
+        sym_info = None
+        for sfx in _SFXS:
+            cand = symbol + sfx
+            if mt5.symbol_select(cand, True):
+                info = mt5.symbol_info(cand)
+                if info is not None:
+                    res_sym = cand
+                    sym_info = info
+                    break
         if sym_info is None:
-            logger.error(f"❌ Symbol info not available for {symbol}")
+            logger.error(f"❌ Symbol {symbol} not found in MT5 for limit order: {mt5.last_error()}")
             return None
+        if res_sym != symbol:
+            logger.info(f"[{symbol}] Resolved to {res_sym} for limit order")
 
         limit_price = round(limit_price, sym_info.digits)
         order_type = mt5.ORDER_TYPE_BUY_LIMIT if direction == 'BUY' else mt5.ORDER_TYPE_SELL_LIMIT
 
         request = {
             'action': mt5.TRADE_ACTION_PENDING,
-            'symbol': symbol,
+            'symbol': res_sym,
             'volume': lot_size,
             'type': order_type,
             'price': limit_price,

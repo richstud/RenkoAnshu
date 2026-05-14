@@ -472,11 +472,36 @@ async def execute_manual_trade(trade: TradeRequest):
                 raise Exception(f"Account {trade.account_id} not connected")
         
         import MetaTrader5 as mt5
-        
-        # Create trade request
-        symbol_info = mt5.symbol_info(trade.symbol)
+
+        # Switch MT5 to the correct account before any symbol/price calls
+        try:
+            account_session.switch_to()
+        except Exception as sw_err:
+            raise Exception(f"Cannot switch to account {trade.account_id}: {sw_err}")
+
+        # Broker suffix aliases — XM uses GOLD#, ETHUSD#, BTCUSD# etc.
+        _SUFFIXES = ["", "#", ".", "m", "+"]
+        resolved_symbol = None
+        symbol_info = None
+        for sfx in _SUFFIXES:
+            candidate = trade.symbol + sfx
+            if mt5.symbol_select(candidate, True):
+                info = mt5.symbol_info(candidate)
+                if info is not None:
+                    resolved_symbol = candidate
+                    symbol_info = info
+                    break
+
         if symbol_info is None:
-            raise Exception(f"Symbol {trade.symbol} not found")
+            err = mt5.last_error()
+            raise Exception(
+                f"Symbol {trade.symbol} not found in MT5 (tried suffixes {_SUFFIXES}). "
+                f"MT5 error: {err}. Check symbol name matches the broker's Market Watch."
+            )
+
+        logger.info(f"Trade: resolved {trade.symbol!r} -> {resolved_symbol!r}")
+        # Use the broker-resolved symbol name for the actual request
+        trade_symbol = resolved_symbol
         
         # Validate lot size
         if trade.lot_size < symbol_info.volume_min:
@@ -488,9 +513,9 @@ async def execute_manual_trade(trade: TradeRequest):
         order_type = mt5.ORDER_TYPE_BUY if trade.trade_type.lower() == "buy" else mt5.ORDER_TYPE_SELL
         
         # Get current price
-        tick = mt5.symbol_info_tick(trade.symbol)
+        tick = mt5.symbol_info_tick(trade_symbol)
         if tick is None:
-            raise Exception(f"Cannot get price for {trade.symbol}")
+            raise Exception(f"Cannot get price for {trade_symbol}")
         
         price = tick.ask if order_type == mt5.ORDER_TYPE_BUY else tick.bid
         
@@ -520,7 +545,7 @@ async def execute_manual_trade(trade: TradeRequest):
         # Build request - only include fields that have values
         request = {
             "action": mt5.TRADE_ACTION_DEAL,
-            "symbol": trade.symbol,
+            "symbol": trade_symbol,
             "volume": trade.lot_size,
             "type": order_type,
             "price": price,
