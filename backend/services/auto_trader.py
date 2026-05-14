@@ -368,16 +368,29 @@ class AutoTrader:
                 first_new_idx -= 1
             first_brick = all_bricks[first_new_idx]
             limit_price = first_brick.close_price  # close of first new-direction brick
-            # 60-second window starts at the MOMENT the first new-direction brick formed
-            signal_start = float(first_brick.timestamp) if first_brick.timestamp else time.time()
 
-            # When the bot starts mid-trend, check historical M1 candles to see if
-            # price violated the limit during the first 60s — if so, skip this signal.
-            window_end = min(time.time(), signal_start + 60.0)
+            # XM (and many brokers) send MT5 timestamps in server-local time (e.g. UTC+3),
+            # while time.time() is UTC. Mixing them gives elapsed = -10800s (3 hours off).
+            # Fix: use the latest M1 candle's time as the MT5 "now" reference (same timezone).
+            # Then compute how many seconds ago the brick formed (all in broker time),
+            # and subtract that from the current wall-clock to get wall_start.
+            mt5_now = int(rates_sorted[-1]['time']) + 60  # +60: last candle covers [time, time+60s)
+            brick_ts = float(first_brick.timestamp) if first_brick.timestamp else float(mt5_now)
+            signal_age_secs = max(0.0, float(mt5_now) - brick_ts)  # seconds since brick formed
+            wall_start = time.time() - signal_age_secs  # wall-clock when brick actually formed
+
+            logger.info(
+                f"[{symbol}] New signal: mt5_now={mt5_now}, brick_ts={int(brick_ts)}, "
+                f"age={signal_age_secs:.0f}s, wall_start=t-{signal_age_secs:.0f}s"
+            )
+
+            # Historical violation check: scan M1 candles within the first 60s of the signal.
+            # Use broker timestamps throughout (window start = brick_ts, window end = brick_ts+60).
+            window_end_mt5 = brick_ts + 60.0
             historically_violated = False
             for r in rates_sorted:
                 r_time = int(r['time'])
-                if r_time < int(signal_start) or r_time > int(window_end):
+                if r_time < int(brick_ts) or r_time > int(window_end_mt5):
                     continue
                 if new_direction == 'SELL' and float(r['high']) > limit_price:
                     historically_violated = True
@@ -415,7 +428,7 @@ class AutoTrader:
                 'direction': new_direction,
                 'limit_price': limit_price,
                 'violation_price': float(first_brick.open_price),
-                'start_time': signal_start,
+                'start_time': wall_start,  # wall-clock (UTC) when brick formed
                 'violated': False,
                 'order_placed': False,
                 'order_ticket': None,
