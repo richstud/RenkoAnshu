@@ -392,6 +392,13 @@ class AutoTrader:
             signal_age_secs = max(0.0, float(mt5_now) - brick_complete_ts)
             wall_start = time.time() - signal_age_secs
 
+            if signal_age_secs > 60.0:
+                logger.info(
+                    f"[{symbol}] Stale brick ({signal_age_secs:.0f}s old) — skipping, waiting for fresh brick"
+                )
+                self.last_brick_state[symbol_key] = current_color
+                return None
+
             logger.info(
                 f"[{symbol}] New signal: mt5_now={mt5_now}, brick_ts={int(brick_ts)}, "
                 f"age={signal_age_secs:.0f}s, wall_start=t-{signal_age_secs:.0f}s"
@@ -494,7 +501,7 @@ class AutoTrader:
         # Place limit order after 60 seconds of uninterrupted confirmation
         if elapsed >= 60.0:
             logger.info(f"✅ [{symbol}] {direction} confirmed (60s). Placing LIMIT @ {limit_price}")
-            result = self._place_limit_order_sync(symbol, direction, limit_price, account_id, config)
+            result = self._place_limit_order_sync(pending['resolved_symbol'], direction, limit_price, account_id, config)
             if result:
                 pending['order_placed'] = True
                 pending['order_ticket'] = result['ticket']
@@ -642,23 +649,15 @@ class AutoTrader:
         manual_lot = config.get('lot_size')
         lot_size = manual_lot if (manual_lot and manual_lot > 0) else self.calculate_lot_size(balance)
 
-        # Resolve broker alias (XM: GOLD#, ETHUSD#, etc.)
-        _SFXS = ["", "#", ".", "m", "+"]
-        res_sym = None
-        sym_info = None
-        for sfx in _SFXS:
-            cand = symbol + sfx
-            if mt5.symbol_select(cand, True):
-                info = mt5.symbol_info(cand)
-                if info is not None:
-                    res_sym = cand
-                    sym_info = info
-                    break
-        if sym_info is None:
-            logger.error(f"❌ Symbol {symbol} not found in MT5 for limit order: {mt5.last_error()}")
+        # Caller passes already-resolved broker symbol (e.g. GOLD.i# not GOLD).
+        res_sym = symbol
+        if not mt5.symbol_select(res_sym, True):
+            logger.error(f"❌ Symbol {res_sym} not in Market Watch: {mt5.last_error()}")
             return None
-        if res_sym != symbol:
-            logger.info(f"[{symbol}] Resolved to {res_sym} for limit order")
+        sym_info = mt5.symbol_info(res_sym)
+        if sym_info is None:
+            logger.error(f"❌ Symbol info unavailable for {res_sym}: {mt5.last_error()}")
+            return None
 
         limit_price = round(limit_price, sym_info.digits)
         order_type = mt5.ORDER_TYPE_BUY_LIMIT if direction == 'BUY' else mt5.ORDER_TYPE_SELL_LIMIT
