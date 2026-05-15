@@ -659,8 +659,36 @@ class AutoTrader:
             logger.error(f"❌ Symbol info unavailable for {res_sym}: {mt5.last_error()}")
             return None
 
-        limit_price = round(limit_price, sym_info.digits)
+        limit_price = float(round(limit_price, sym_info.digits))
         order_type = mt5.ORDER_TYPE_BUY_LIMIT if direction == 'BUY' else mt5.ORDER_TYPE_SELL_LIMIT
+
+        # Validate: limit price must be far enough from current market price.
+        # Brokers enforce a minimum stop distance (trade_stops_level points).
+        # For crypto on XM this can be 100+ points. If too close, skip gracefully.
+        tick = mt5.symbol_info_tick(res_sym)
+        current_ask = float(tick.ask) if tick else None
+        current_bid = float(tick.bid) if tick else None
+        min_dist_points = sym_info.trade_stops_level or 0
+        min_dist_price = min_dist_points * sym_info.point
+        logger.info(
+            f"[{symbol}] Limit order: price={limit_price}, ask={current_ask}, bid={current_bid}, "
+            f"min_stop_dist={min_dist_points}pts ({min_dist_price:.{sym_info.digits}f})"
+        )
+        if current_ask is not None and min_dist_price > 0:
+            if direction == 'BUY' and (current_ask - limit_price) < min_dist_price:
+                logger.warning(
+                    f"⚠️ [{symbol}] BUY LIMIT {limit_price} too close to ask {current_ask} "
+                    f"(need {min_dist_price:.{sym_info.digits}f} gap, have "
+                    f"{current_ask - limit_price:.{sym_info.digits}f}) — skipping"
+                )
+                return None
+            if direction == 'SELL' and (limit_price - current_bid) < min_dist_price:
+                logger.warning(
+                    f"⚠️ [{symbol}] SELL LIMIT {limit_price} too close to bid {current_bid} "
+                    f"(need {min_dist_price:.{sym_info.digits}f} gap, have "
+                    f"{limit_price - current_bid:.{sym_info.digits}f}) — skipping"
+                )
+                return None
 
         request = {
             'action': mt5.TRADE_ACTION_PENDING,
