@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List, Optional
 
 @dataclass
@@ -19,25 +19,53 @@ class RenkoEngine:
 
     def feed_tick(self, price: float, timestamp: int = 0) -> Optional[RenkoBrick]:
         if self.last_price is None:
-            # Snap anchor to nearest brick boundary so levels align with charting
-            # platforms (e.g. XM Traditional Renko). Without snapping, the engine
-            # anchors to a random first-candle close (e.g. 4572.65) producing
-            # non-round levels. Snapping gives clean levels: 4578, 4580, 4582...
-            self.last_price = round(round(price / self.brick_size) * self.brick_size,
-                                    10)  # 10 dp avoids float accumulation errors
+            # Use actual first-candle price as anchor (no snapping).
+            self.last_price = price
             return None
 
+        last_color = self.bricks[-1].color if self.bricks else None
         moved = price - self.last_price
-        brick_units = int(abs(moved) // self.brick_size)
 
-        if brick_units == 0:
-            return None
+        # Traditional Renko rules (matches XM / MT5 chart):
+        #   Continuation (same direction): 1 * brick_size
+        #   Reversal (opposite direction) : 2 * brick_size
+        # Example (brick_size=2): red trend last_close=100
+        #   -> green reversal needs price >= 104 (2x=4 above 100)
+        #   -> first green brick: open=100, close=102
+        if last_color is None:
+            # First brick ever: 1x in either direction
+            if moved >= self.brick_size:
+                direction = 'green'
+                brick_units = int(moved // self.brick_size)
+            elif moved <= -self.brick_size:
+                direction = 'red'
+                brick_units = int(-moved // self.brick_size)
+            else:
+                return None
+        elif last_color == 'green':
+            if moved >= self.brick_size:                     # continuation green (1x)
+                direction = 'green'
+                brick_units = int(moved // self.brick_size)
+            elif moved <= -2 * self.brick_size:              # reversal red (2x)
+                direction = 'red'
+                brick_units = 1 + int(max(0, -moved - 2 * self.brick_size) // self.brick_size)
+            else:
+                return None
+        else:  # last_color == 'red'
+            if moved <= -self.brick_size:                    # continuation red (1x)
+                direction = 'red'
+                brick_units = int(-moved // self.brick_size)
+            elif moved >= 2 * self.brick_size:               # reversal green (2x)
+                direction = 'green'
+                brick_units = 1 + int(max(0, moved - 2 * self.brick_size) // self.brick_size)
+            else:
+                return None
 
         new_brick = None
         for _ in range(brick_units):
-            if moved > 0:
+            if direction == 'green':
                 brick_open = self.last_price
-                brick_close = brick_open + self.brick_size
+                brick_close = round(brick_open + self.brick_size, 10)
                 new_brick = RenkoBrick(
                     open_price=brick_open,
                     close_price=brick_close,
@@ -46,10 +74,9 @@ class RenkoEngine:
                     color="green",
                     timestamp=timestamp,
                 )
-                self.bricks.append(new_brick)
             else:
                 brick_open = self.last_price
-                brick_close = brick_open - self.brick_size
+                brick_close = round(brick_open - self.brick_size, 10)
                 new_brick = RenkoBrick(
                     open_price=brick_open,
                     close_price=brick_close,
@@ -58,7 +85,7 @@ class RenkoEngine:
                     color="red",
                     timestamp=timestamp,
                 )
-                self.bricks.append(new_brick)
+            self.bricks.append(new_brick)
             self.last_price = brick_close
 
         return new_brick
