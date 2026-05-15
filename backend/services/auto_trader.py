@@ -392,9 +392,24 @@ class AutoTrader:
             signal_age_secs = max(0.0, float(mt5_now) - brick_complete_ts)
             wall_start = time.time() - signal_age_secs
 
+            # ── Always cancel opposite pending orders and close opposite positions
+            # on ANY brick flip — regardless of whether the new signal is stale.
+            existing = self.pending_signals.get(symbol_key, {})
+            if existing.get('order_ticket'):
+                self._cancel_pending_order_sync(existing.get('resolved_symbol', resolved_symbol), account_id, existing['order_ticket'])
+            self._close_opposite_position_sync(resolved_symbol, account_id)
+            # Also cancel any MT5 pending orders for this symbol that are now in the wrong direction
+            mt5_orders = mt5.orders_get(symbol=resolved_symbol)
+            if mt5_orders:
+                for ord_ in mt5_orders:
+                    is_buy_order = ord_.type in (mt5.ORDER_TYPE_BUY_LIMIT, mt5.ORDER_TYPE_BUY_STOP)
+                    if (new_direction == 'SELL' and is_buy_order) or (new_direction == 'BUY' and not is_buy_order):
+                        logger.info(f"🚫 [{symbol}] Cancelling stale opposite MT5 order {ord_.ticket}")
+                        self._cancel_pending_order_sync(resolved_symbol, account_id, ord_.ticket)
+
             if signal_age_secs > 60.0:
                 logger.info(
-                    f"[{symbol}] Stale brick ({signal_age_secs:.0f}s old) — skipping, waiting for fresh brick"
+                    f"[{symbol}] Stale brick ({signal_age_secs:.0f}s old) — skipping new signal (close/cancel already done)"
                 )
                 self.last_brick_state[symbol_key] = current_color
                 return None
@@ -432,12 +447,6 @@ class AutoTrader:
                 self.last_brick_state[symbol_key] = current_color
                 return None
 
-            # Cancel any existing pending order and close any opposite open position
-            existing = self.pending_signals.get(symbol_key, {})
-            if existing.get('order_ticket'):
-                self._cancel_pending_order_sync(symbol, account_id, existing['order_ticket'])
-            self._close_opposite_position_sync(resolved_symbol, account_id)
-
             # Start 60s confirmation window.
             # violation_price = limit_price = brick CLOSE.
             # BUY ($100->$102): cancel if price falls BELOW $102.
@@ -465,7 +474,21 @@ class AutoTrader:
             logger.debug(f"[{symbol}] No pending signal active")
             return None
         if pending.get('order_placed'):
-            logger.debug(f"[{symbol}] Order already placed — done")
+            # Order was placed (limit or filled position). Still watch for opposite brick
+            # and close/cancel if current brick direction opposes the original trade.
+            placed_direction = pending.get('direction')
+            if placed_direction:
+                should_close = (placed_direction == 'BUY' and current_color == 'red') or                                (placed_direction == 'SELL' and current_color == 'green')
+                if should_close:
+                    logger.info(
+                        f"🔴 [{symbol}] Opposite {current_color} brick — closing {placed_direction} position/order"
+                    )
+                    mt5_orders = mt5.orders_get(symbol=resolved_symbol)
+                    if mt5_orders:
+                        for ord_ in mt5_orders:
+                            self._cancel_pending_order_sync(resolved_symbol, account_id, ord_.ticket)
+                    self._close_opposite_position_sync(resolved_symbol, account_id)
+                    self.pending_signals.pop(symbol_key, None)
             return None
         if pending.get('violated'):
             logger.debug(f"[{symbol}] Signal previously violated — skipping")
