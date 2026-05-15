@@ -345,6 +345,11 @@ class AutoTrader:
         current_color = current_brick.color
         last_color = self.last_brick_state.get(symbol_key)
 
+        # Run every cycle: cancel/close any MT5 orders or positions that conflict
+        # with the current brick direction. This handles restarts (pending_signals
+        # is empty) and any missed cancellations from previous cycles.
+        self._safety_sweep_sync(resolved_symbol, current_color, account_id, symbol_key, symbol)
+
         if last_color is None:
             if len(all_bricks) >= 2:
                 # Walk backwards to find the most recent brick whose color differs
@@ -474,21 +479,8 @@ class AutoTrader:
             logger.debug(f"[{symbol}] No pending signal active")
             return None
         if pending.get('order_placed'):
-            # Order was placed (limit or filled position). Still watch for opposite brick
-            # and close/cancel if current brick direction opposes the original trade.
-            placed_direction = pending.get('direction')
-            if placed_direction:
-                should_close = (placed_direction == 'BUY' and current_color == 'red') or                                (placed_direction == 'SELL' and current_color == 'green')
-                if should_close:
-                    logger.info(
-                        f"🔴 [{symbol}] Opposite {current_color} brick — closing {placed_direction} position/order"
-                    )
-                    mt5_orders = mt5.orders_get(symbol=resolved_symbol)
-                    if mt5_orders:
-                        for ord_ in mt5_orders:
-                            self._cancel_pending_order_sync(resolved_symbol, account_id, ord_.ticket)
-                    self._close_opposite_position_sync(resolved_symbol, account_id)
-                    self.pending_signals.pop(symbol_key, None)
+            # Safety sweep (above) already handles cancellation/closure when
+            # opposite brick forms. Just return — no further action needed.
             return None
         if pending.get('violated'):
             logger.debug(f"[{symbol}] Signal previously violated — skipping")
@@ -758,6 +750,43 @@ class AutoTrader:
             'account_id': account_id, 'order_type': 'LIMIT',
         }
         return {'ticket': result.order, 'lot_size': lot_size}
+
+
+    def _safety_sweep_sync(self, resolved_symbol: str, current_color: str,
+                            account_id: int, symbol_key: str, symbol: str):
+        """Runs EVERY cycle. Cancels MT5 pending orders and closes positions
+        that conflict with the current Renko brick direction.
+        This ensures correctness even after backend restarts when pending_signals
+        dict is empty and pre-restart orders are unknown to the system."""
+        allowed_side = 'BUY' if current_color == 'green' else 'SELL'
+
+        mt5_orders = mt5.orders_get(symbol=resolved_symbol)
+        if mt5_orders:
+            for ord_ in mt5_orders:
+                is_buy = ord_.type in (mt5.ORDER_TYPE_BUY_LIMIT, mt5.ORDER_TYPE_BUY_STOP)
+                ord_side = 'BUY' if is_buy else 'SELL'
+                if ord_side != allowed_side:
+                    logger.info(
+                        f"🔄 [{symbol}] Safety sweep: cancelling {ord_side} order "
+                        f"ticket={ord_.ticket} (brick={current_color} → only {allowed_side} allowed)"
+                    )
+                    self._cancel_pending_order_sync(resolved_symbol, account_id, ord_.ticket)
+                    # Clean up pending_signals if this is our tracked order
+                    pending = self.pending_signals.get(symbol_key, {})
+                    if pending.get('order_ticket') == ord_.ticket:
+                        self.pending_signals.pop(symbol_key, None)
+
+        positions = mt5.positions_get(symbol=resolved_symbol)
+        if positions:
+            for pos in positions:
+                pos_side = 'BUY' if pos.type == mt5.POSITION_TYPE_BUY else 'SELL'
+                if pos_side != allowed_side:
+                    logger.info(
+                        f"🔄 [{symbol}] Safety sweep: closing {pos_side} position "
+                        f"ticket={pos.ticket} (brick={current_color})"
+                    )
+                    self._close_opposite_position_sync(resolved_symbol, account_id)
+                    break
 
     def _cancel_pending_order_sync(self, symbol: str, account_id: int, ticket: int):
         """Cancel a specific pending limit order by ticket number."""
