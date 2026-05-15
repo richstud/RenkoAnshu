@@ -19,7 +19,12 @@ class RenkoEngine:
 
     def feed_tick(self, price: float, timestamp: int = 0) -> Optional[RenkoBrick]:
         if self.last_price is None:
-            self.last_price = price
+            # Snap anchor to nearest brick boundary so levels align with charting
+            # platforms (e.g. XM Traditional Renko). Without snapping, the engine
+            # anchors to a random first-candle close (e.g. 4572.65) producing
+            # non-round levels. Snapping gives clean levels: 4578, 4580, 4582...
+            self.last_price = round(round(price / self.brick_size) * self.brick_size,
+                                    10)  # 10 dp avoids float accumulation errors
             return None
 
         moved = price - self.last_price
