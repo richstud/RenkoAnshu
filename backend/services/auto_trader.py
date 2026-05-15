@@ -412,20 +412,16 @@ class AutoTrader:
                         logger.info(f"🚫 [{symbol}] Cancelling stale opposite MT5 order {ord_.ticket}")
                         self._cancel_pending_order_sync(resolved_symbol, account_id, ord_.ticket)
 
-            if signal_age_secs > 60.0:
-                logger.info(
-                    f"[{symbol}] Stale brick ({signal_age_secs:.0f}s old) — skipping new signal (close/cancel already done)"
-                )
-                self.last_brick_state[symbol_key] = current_color
-                return None
-
             logger.info(
-                f"[{symbol}] New signal: mt5_now={mt5_now}, brick_ts={int(brick_ts)}, "
-                f"age={signal_age_secs:.0f}s, wall_start=t-{signal_age_secs:.0f}s"
+                f"[{symbol}] New signal: brick_ts={int(brick_ts)}, age={signal_age_secs:.0f}s, "
+                f"direction={new_direction}, limit_price={limit_price}"
             )
 
-            # Historical check: scan M1 candles AFTER brick completes (skip brick own candle).
-            # BUY: violated if any candle LOW < limit_price. SELL: violated if HIGH > limit_price.
+            # ── HISTORICAL VIOLATION CHECK ─────────────────────────────────────
+            # Scan M1 candles in the 60s window after the brick completed.
+            # Applies to BOTH fresh and stale bricks — stale bricks must still pass.
+            # BUY: violated if any candle LOW dips below limit_price (price went below brick close).
+            # SELL: violated if any candle HIGH rises above limit_price (price went above brick close).
             window_start_mt5 = brick_complete_ts
             window_end_mt5 = brick_complete_ts + 60.0
             historically_violated = False
@@ -452,10 +448,32 @@ class AutoTrader:
                 self.last_brick_state[symbol_key] = current_color
                 return None
 
-            # Start 60s confirmation window.
-            # violation_price = limit_price = brick CLOSE.
-            # BUY ($100->$102): cancel if price falls BELOW $102.
-            # SELL ($108->$106): cancel if price rises ABOVE $106.
+            if signal_age_secs > 60.0:
+                # ── STALE BRICK: 60s window already elapsed with NO violation ──
+                # The confirmation window is over and price held. Place order immediately.
+                logger.info(
+                    f"📊 [{symbol}] Stale brick ({signal_age_secs:.0f}s old) — "
+                    f"60s window clean → placing {new_direction} LIMIT @ {limit_price} NOW"
+                )
+                self.last_brick_state[symbol_key] = current_color
+                result = self._place_limit_order_sync(
+                    resolved_symbol, new_direction, limit_price, account_id, config
+                )
+                if result:
+                    self.pending_signals[symbol_key] = {
+                        'direction': new_direction,
+                        'limit_price': limit_price,
+                        'violation_price': limit_price,
+                        'start_time': time.time(),
+                        'violated': False,
+                        'order_placed': True,
+                        'order_ticket': result.get('ticket'),
+                        'resolved_symbol': resolved_symbol,
+                    }
+                return None
+
+            # ── FRESH BRICK: start 60s confirmation window ─────────────────────
+            # Price must stay above (BUY) or below (SELL) limit_price for 60 full seconds.
             self.pending_signals[symbol_key] = {
                 'direction': new_direction,
                 'limit_price': limit_price,
@@ -468,7 +486,7 @@ class AutoTrader:
             }
             logger.info(
                 f"📊 [{symbol}] Brick: {last_color}→{current_color} | "
-                f"Waiting 60s confirmation for {new_direction} LIMIT @ {limit_price}"
+                f"Starting 60s confirmation for {new_direction} LIMIT @ {limit_price}"
             )
 
         self.last_brick_state[symbol_key] = current_color
