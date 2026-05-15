@@ -18,12 +18,12 @@ import httpx
 logger = logging.getLogger(__name__)
 
 _BROKER_ALIASES = {
-    'GOLD':   ['XAUUSD', 'XAUUSD#', 'XAUUSDm', 'GOLD#', 'GOLD.', 'GOLD'],
+    'GOLD':   ['GOLD.i#', 'XAUUSD', 'XAUUSD#', 'XAUUSDm', 'GOLD#', 'GOLD.', 'GOLD'],
     'SILVER': ['XAGUSD', 'XAGUSD#', 'XAGUSDm', 'SILVER#', 'SILVER'],
     'OIL':    ['USOIL',  'USOIL#',  'WTI',     'OIL#',  'OIL'],
     'NATGAS': ['NATGAS', 'NATGAS#', 'NGAS'],
 }
-_DEFAULT_SUFFIXES = ['', '#', '.', 'm', '+']
+_DEFAULT_SUFFIXES = ['', '.i#', '#', '.', 'm', '+']
 
 
 def _resolve_broker_symbol(symbol):
