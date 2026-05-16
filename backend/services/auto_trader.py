@@ -336,7 +336,21 @@ class AutoTrader:
                 renko.feed_tick(rate['close'], int(rate['time']))
             self.last_candle_times[engine_key] = max(int(r['time']) for r in new_rates)
 
-        all_bricks = renko.bricks  # full history needed to find first brick of new color
+        # ── REAL-TIME: Feed live bid tick every cycle ─────────────────────────
+        # copy_rates_from_pos only returns CLOSED M1 candles — up to 60s lag.
+        # Feeding the current live bid IMMEDIATELY reflects the in-progress M1
+        # candle, so brick reversals are detected in real-time (< 1s), not after
+        # the M1 candle closes. Using broker-time reference keeps timestamps
+        # consistent with M1 candle times (same UTC+3 timezone).
+        _mt5_now_ref = int(rates_sorted[-1]['time']) + 60 if rates_sorted else int(time.time())
+        live_tick = mt5.symbol_info_tick(resolved_symbol)
+        if live_tick:
+            renko.feed_tick(float(live_tick.bid), _mt5_now_ref)
+        current_price = float(live_tick.bid) if live_tick else None
+
+        # Re-read bricks AFTER live tick feed — engine state now reflects true
+        # current price including any bricks formed within the current M1 candle.
+        all_bricks = renko.bricks
         if len(all_bricks) == 0:
             logger.info(f"⏳ [{symbol}] No bricks yet (brick_size={brick_size})")
             return None
@@ -357,10 +371,6 @@ class AutoTrader:
             self.last_brick_state[symbol_key] = current_color
             logger.info(f"[{symbol}] Startup: current brick={current_color}. Waiting for next live flip.")
             return None
-
-        # Get live bid price for confirmation checks
-        tick = mt5.symbol_info_tick(resolved_symbol)
-        current_price = float(tick.bid) if tick else None
 
         # ── BRICK CHANGE: new brick formed ────────────────────────────────────
         if last_color != current_color:
