@@ -386,25 +386,12 @@ class AutoTrader:
             first_brick = all_bricks[first_new_idx]
             limit_price = first_brick.close_price  # close of first new-direction brick
 
-            # XM (and many brokers) send MT5 timestamps in server-local time (e.g. UTC+3),
-            # while time.time() is UTC. Mixing them gives elapsed = -10800s (3 hours off).
-            # Fix: use the latest M1 candle's time as the MT5 "now" reference (same timezone).
-            # Then compute how many seconds ago the brick formed (all in broker time),
-            # and subtract that from the current wall-clock to get wall_start.
-            mt5_now = int(rates_sorted[-1]['time']) + 60
-            brick_ts = float(first_brick.timestamp) if first_brick.timestamp else float(mt5_now - 60)
-            # Brick completes when its M1 candle closes: brick_ts + 60s
-            brick_complete_ts = brick_ts + 60.0
-            signal_age_secs = max(0.0, float(mt5_now) - brick_complete_ts)
-            wall_start = time.time() - signal_age_secs
-
-            # ── Always cancel opposite pending orders and close opposite positions
-            # on ANY brick flip — regardless of whether the new signal is stale.
+            # ── Cancel opposite orders/positions immediately on ANY brick flip ──
             existing = self.pending_signals.get(symbol_key, {})
             if existing.get('order_ticket'):
                 self._cancel_pending_order_sync(existing.get('resolved_symbol', resolved_symbol), account_id, existing['order_ticket'])
             self._close_opposite_position_sync(resolved_symbol, account_id)
-            # Also cancel any MT5 pending orders for this symbol that are now in the wrong direction
+            # Cancel any MT5 pending orders for this symbol that are now in the wrong direction
             mt5_orders = mt5.orders_get(symbol=resolved_symbol)
             if mt5_orders:
                 for ord_ in mt5_orders:
@@ -414,34 +401,45 @@ class AutoTrader:
                         self._cancel_pending_order_sync(resolved_symbol, account_id, ord_.ticket)
 
             logger.info(
-                f"[{symbol}] New signal: brick_ts={int(brick_ts)}, age={signal_age_secs:.0f}s, "
-                f"direction={new_direction}, limit_price={limit_price}"
+                f"[{symbol}] Brick flip: {last_color}→{current_color} | "
+                f"{new_direction} signal @ {limit_price}"
             )
 
-            # ── HISTORICAL VIOLATION CHECK ─────────────────────────────────────
-            # Scan M1 candles in the 60s window after the brick completed.
-            # Applies to BOTH fresh and stale bricks — stale bricks must still pass.
-            # BUY: violated if any candle LOW dips below limit_price (price went below brick close).
-            # SELL: violated if any candle HIGH rises above limit_price (price went above brick close).
-            window_start_mt5 = brick_complete_ts
-            window_end_mt5 = brick_complete_ts + 60.0
+            # ── REJECT if price already violated before we detected the brick ──
+            # Scan M1 candle lows/highs since the brick completed to see if price
+            # ever crossed back through the limit level. Uses broker-time reference.
+            mt5_now = int(rates_sorted[-1]['time']) + 60   # current broker time
+            brick_ts = float(first_brick.timestamp) if first_brick.timestamp else float(mt5_now - 120)
+            brick_complete_ts = brick_ts + 60.0             # when the M1 bar that formed this brick CLOSED
+            signal_age_secs = max(0.0, float(mt5_now) - brick_complete_ts)
+
+            if signal_age_secs > 300.0:
+                logger.info(
+                    f"[{symbol}] Brick too old ({signal_age_secs:.0f}s) — skipping (>300s)"
+                )
+                self.last_brick_state[symbol_key] = current_color
+                return None
+
+            # Check historical candles ONLY for candles that closed BEFORE now.
+            # BUY: reject if any candle low went below limit_price (price broke below brick close).
+            # SELL: reject if any candle high went above limit_price (price broke above brick close).
             historically_violated = False
-            for r in rates_sorted:
+            for r in confirmed_rates:          # confirmed_rates = closed M1 bars only
                 r_time = int(r['time'])
-                if r_time < int(window_start_mt5) or r_time > int(window_end_mt5):
-                    continue
+                if r_time < int(brick_complete_ts):
+                    continue                    # before the brick closed — ignore
                 if new_direction == 'BUY' and float(r['low']) < limit_price:
                     historically_violated = True
                     logger.info(
-                        f"[{symbol}] BUY violated in history "
-                        f"(candle low {r['low']} < limit {limit_price}) -- skipping"
+                        f"[{symbol}] BUY pre-detection violation "
+                        f"(candle low {r['low']:.2f} < limit {limit_price:.2f}) — skipping"
                     )
                     break
                 if new_direction == 'SELL' and float(r['high']) > limit_price:
                     historically_violated = True
                     logger.info(
-                        f"[{symbol}] SELL violated in history "
-                        f"(candle high {r['high']} > limit {limit_price}) -- skipping"
+                        f"[{symbol}] SELL pre-detection violation "
+                        f"(candle high {r['high']:.2f} > limit {limit_price:.2f}) — skipping"
                     )
                     break
 
@@ -449,55 +447,25 @@ class AutoTrader:
                 self.last_brick_state[symbol_key] = current_color
                 return None
 
-            if signal_age_secs > 300.0:
-                # Brick is older than 5 minutes — the 60s window is long past and the
-                # historical candle buffer may not even cover that window. Skip to avoid
-                # placing orders on very stale signals (false-clean history).
-                logger.info(
-                    f"[{symbol}] Brick too old ({signal_age_secs:.0f}s) — skipping (max 300s)"
-                )
-                self.last_brick_state[symbol_key] = current_color
-                return None
-
-            if signal_age_secs > 60.0:
-                # ── STALE BRICK: 60s window elapsed with NO violation in history ──
-                # Confirmation window passed cleanly — place order immediately.
-                logger.info(
-                    f"[{symbol}] Stale brick ({signal_age_secs:.0f}s old) — "
-                    f"60s window clean → placing {new_direction} LIMIT @ {limit_price} NOW"
-                )
-                self.last_brick_state[symbol_key] = current_color
-                result = self._place_limit_order_sync(
-                    resolved_symbol, new_direction, limit_price, account_id, config
-                )
-                if result:
-                    self.pending_signals[symbol_key] = {
-                        'direction': new_direction,
-                        'limit_price': limit_price,
-                        'violation_price': limit_price,
-                        'start_time': time.time(),
-                        'violated': False,
-                        'order_placed': True,
-                        'order_ticket': result.get('ticket'),
-                        'resolved_symbol': resolved_symbol,
-                    }
-                return None
-
-            # ── FRESH BRICK: start 60s confirmation window ─────────────────────
-            # Price must stay above (BUY) or below (SELL) limit_price for 60 full seconds.
+            # ── START 60s LIVE CONFIRMATION WINDOW (always from NOW) ───────────
+            # After the M1-bar-skip fix, bricks are always detected ~60s after they
+            # form. Pre-backdating the timer caused it to fire immediately on the
+            # first cycle (elapsed=60 on arrival). Now we always start the 60s
+            # countdown from the moment of detection — user always sees a full
+            # visible 60-second wait before the limit order appears.
             self.pending_signals[symbol_key] = {
                 'direction': new_direction,
                 'limit_price': limit_price,
                 'violation_price': limit_price,
-                'start_time': wall_start,
+                'start_time': time.time(),          # ← always NOW, never backdated
                 'violated': False,
                 'order_placed': False,
                 'order_ticket': None,
                 'resolved_symbol': resolved_symbol,
             }
             logger.info(
-                f"📊 [{symbol}] Brick: {last_color}→{current_color} | "
-                f"Starting 60s confirmation for {new_direction} LIMIT @ {limit_price}"
+                f"📊 [{symbol}] Brick confirmed: {last_color}→{current_color} | "
+                f"Starting 60s live confirmation for {new_direction} LIMIT @ {limit_price}"
             )
 
         self.last_brick_state[symbol_key] = current_color
