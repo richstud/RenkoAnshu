@@ -351,26 +351,12 @@ class AutoTrader:
         self._safety_sweep_sync(resolved_symbol, current_color, account_id, symbol_key, symbol)
 
         if last_color is None:
-            if len(all_bricks) >= 2:
-                # Walk backwards to find the most recent brick whose color differs
-                # from the current streak so the bot picks up an in-progress trend
-                # immediately on startup instead of waiting for the next flip.
-                prev_color = None
-                for i in range(len(all_bricks) - 2, -1, -1):
-                    if all_bricks[i].color != current_color:
-                        prev_color = all_bricks[i].color
-                        break
-                if prev_color is None:
-                    # All history is same color — nothing to act on yet
-                    self.last_brick_state[symbol_key] = current_color
-                    return None
-                last_color = prev_color
-                logger.info(
-                    f"📊 [{symbol}] Startup: detected {prev_color}→{current_color} trend in history"
-                )
-            else:
-                self.last_brick_state[symbol_key] = current_color
-                return None
+            # On startup: sync state to current brick color, run safety sweep (already done),
+            # and wait for the next LIVE brick flip. Never generate orders from historical data —
+            # that caused false orders at wrong prices/times on every restart.
+            self.last_brick_state[symbol_key] = current_color
+            logger.info(f"[{symbol}] Startup: current brick={current_color}. Waiting for next live flip.")
+            return None
 
         # Get live bid price for confirmation checks
         tick = mt5.symbol_info_tick(resolved_symbol)
@@ -379,6 +365,11 @@ class AutoTrader:
         # ── BRICK CHANGE: new brick formed ────────────────────────────────────
         if last_color != current_color:
             new_direction = 'BUY' if current_color == 'green' else 'SELL'
+
+            # Clear stale opposite-direction signal IMMEDIATELY so it cannot leak.
+            # We always rebuild pending_signals below if the new signal is valid.
+            self.pending_signals.pop(symbol_key, None)
+
             first_new_idx = len(all_bricks) - 1
             while first_new_idx > 0 and all_bricks[first_new_idx - 1].color == current_color:
                 first_new_idx -= 1
@@ -448,11 +439,21 @@ class AutoTrader:
                 self.last_brick_state[symbol_key] = current_color
                 return None
 
-            if signal_age_secs > 60.0:
-                # ── STALE BRICK: 60s window already elapsed with NO violation ──
-                # The confirmation window is over and price held. Place order immediately.
+            if signal_age_secs > 300.0:
+                # Brick is older than 5 minutes — the 60s window is long past and the
+                # historical candle buffer may not even cover that window. Skip to avoid
+                # placing orders on very stale signals (false-clean history).
                 logger.info(
-                    f"📊 [{symbol}] Stale brick ({signal_age_secs:.0f}s old) — "
+                    f"[{symbol}] Brick too old ({signal_age_secs:.0f}s) — skipping (max 300s)"
+                )
+                self.last_brick_state[symbol_key] = current_color
+                return None
+
+            if signal_age_secs > 60.0:
+                # ── STALE BRICK: 60s window elapsed with NO violation in history ──
+                # Confirmation window passed cleanly — place order immediately.
+                logger.info(
+                    f"[{symbol}] Stale brick ({signal_age_secs:.0f}s old) — "
                     f"60s window clean → placing {new_direction} LIMIT @ {limit_price} NOW"
                 )
                 self.last_brick_state[symbol_key] = current_color
@@ -497,8 +498,32 @@ class AutoTrader:
             logger.debug(f"[{symbol}] No pending signal active")
             return None
         if pending.get('order_placed'):
-            # Safety sweep (above) already handles cancellation/closure when
-            # opposite brick forms. Just return — no further action needed.
+            # Real-time reversal detection using live tick price.
+            # M1-candle Renko has up to 60s detection delay. We use live bid
+            # vs engine reference price to cancel/close IMMEDIATELY when a
+            # reversal brick would have formed — before the M1 candle closes.
+            if current_price is not None:
+                direction_placed = pending['direction']
+                engine_ref = renko.last_price  # close of latest confirmed brick = reversal anchor
+                # Reversal threshold: 2x brick_size from engine reference (Traditional Renko rules)
+                if direction_placed == 'BUY' and current_price <= engine_ref - (2.0 * brick_size):
+                    logger.info(
+                        f"[{symbol}] LIVE REVERSAL: BUY order — price {current_price:.5f} "
+                        f"<= {engine_ref:.5f} - 2x{brick_size} — cancelling NOW"
+                    )
+                    if pending.get('order_ticket'):
+                        self._cancel_pending_order_sync(resolved_symbol, account_id, pending['order_ticket'])
+                    self._close_opposite_position_sync(resolved_symbol, account_id)
+                    self.pending_signals.pop(symbol_key, None)
+                elif direction_placed == 'SELL' and current_price >= engine_ref + (2.0 * brick_size):
+                    logger.info(
+                        f"[{symbol}] LIVE REVERSAL: SELL order — price {current_price:.5f} "
+                        f">= {engine_ref:.5f} + 2x{brick_size} — cancelling NOW"
+                    )
+                    if pending.get('order_ticket'):
+                        self._cancel_pending_order_sync(resolved_symbol, account_id, pending['order_ticket'])
+                    self._close_opposite_position_sync(resolved_symbol, account_id)
+                    self.pending_signals.pop(symbol_key, None)
             return None
         if pending.get('violated'):
             logger.debug(f"[{symbol}] Signal previously violated — skipping")
