@@ -324,33 +324,29 @@ class AutoTrader:
         renko = self.renko_engines[engine_key]
 
         rates_sorted = sorted(rates, key=lambda r: int(r['time']))
+
+        # ── CRITICAL: Skip the current in-progress M1 bar (rates_sorted[-1]) ──
+        # copy_rates_from_pos(pos=0) includes the CURRENT, still-forming M1 candle
+        # as the newest entry. Feeding it to the engine causes false brick flips
+        # because its close price is just the current mid-candle price (e.g. only
+        # 2 seconds into the new minute). XM confirms M1 Renko bricks at :02/:03
+        # of each minute — we must only process FULLY CLOSED candles.
+        # rates_sorted[:-1] = all bars EXCEPT the current incomplete one.
+        confirmed_rates = rates_sorted[:-1] if len(rates_sorted) > 1 else []
+
         last_fed_time = self.last_candle_times.get(engine_key, 0)
         if last_fed_time == 0:
-            new_rates = rates_sorted
-            logger.info(f"📊 Initializing Renko engine for {symbol} with {len(new_rates)} historical candles")
+            new_rates = confirmed_rates
+            logger.info(f"📊 Initializing Renko engine for {symbol} with {len(new_rates)} confirmed M1 candles")
         else:
-            new_rates = [r for r in rates_sorted if int(r['time']) > last_fed_time]
+            new_rates = [r for r in confirmed_rates if int(r['time']) > last_fed_time]
 
         if new_rates:
             for rate in new_rates:
                 renko.feed_tick(rate['close'], int(rate['time']))
             self.last_candle_times[engine_key] = max(int(r['time']) for r in new_rates)
 
-        # ── IMPORTANT: Do NOT feed live tick to the Renko engine ─────────────
-        # The engine's last_price is the anchor for brick boundaries. Feeding a
-        # live bid tick can permanently shift that anchor if the price crosses a
-        # brick threshold, desyncing the engine from the XM chart (which only
-        # confirms bricks at M1 closes). This caused false green→red flips and
-        # sell limits being placed mid-downtrend at wrong prices.
-        #
-        # Live tick is only used for current_price (violation checks + live
-        # reversal detection in the order_placed block below). Those checks
-        # compare against renko.last_price (M1-confirmed anchor) which is
-        # correct and never desyncs from XM.
-        live_tick = mt5.symbol_info_tick(resolved_symbol)
-        current_price = float(live_tick.bid) if live_tick else None
-
-        all_bricks = renko.bricks
+        all_bricks = renko.bricks  # full history needed to find first brick of new color
         if len(all_bricks) == 0:
             logger.info(f"⏳ [{symbol}] No bricks yet (brick_size={brick_size})")
             return None
@@ -371,6 +367,10 @@ class AutoTrader:
             self.last_brick_state[symbol_key] = current_color
             logger.info(f"[{symbol}] Startup: current brick={current_color}. Waiting for next live flip.")
             return None
+
+        # Get live bid price for confirmation checks
+        tick = mt5.symbol_info_tick(resolved_symbol)
+        current_price = float(tick.bid) if tick else None
 
         # ── BRICK CHANGE: new brick formed ────────────────────────────────────
         if last_color != current_color:
