@@ -336,20 +336,20 @@ class AutoTrader:
                 renko.feed_tick(rate['close'], int(rate['time']))
             self.last_candle_times[engine_key] = max(int(r['time']) for r in new_rates)
 
-        # ── REAL-TIME: Feed live bid tick every cycle ─────────────────────────
-        # copy_rates_from_pos only returns CLOSED M1 candles — up to 60s lag.
-        # Feeding the current live bid IMMEDIATELY reflects the in-progress M1
-        # candle, so brick reversals are detected in real-time (< 1s), not after
-        # the M1 candle closes. Using broker-time reference keeps timestamps
-        # consistent with M1 candle times (same UTC+3 timezone).
-        _mt5_now_ref = int(rates_sorted[-1]['time']) + 60 if rates_sorted else int(time.time())
+        # ── IMPORTANT: Do NOT feed live tick to the Renko engine ─────────────
+        # The engine's last_price is the anchor for brick boundaries. Feeding a
+        # live bid tick can permanently shift that anchor if the price crosses a
+        # brick threshold, desyncing the engine from the XM chart (which only
+        # confirms bricks at M1 closes). This caused false green→red flips and
+        # sell limits being placed mid-downtrend at wrong prices.
+        #
+        # Live tick is only used for current_price (violation checks + live
+        # reversal detection in the order_placed block below). Those checks
+        # compare against renko.last_price (M1-confirmed anchor) which is
+        # correct and never desyncs from XM.
         live_tick = mt5.symbol_info_tick(resolved_symbol)
-        if live_tick:
-            renko.feed_tick(float(live_tick.bid), _mt5_now_ref)
         current_price = float(live_tick.bid) if live_tick else None
 
-        # Re-read bricks AFTER live tick feed — engine state now reflects true
-        # current price including any bricks formed within the current M1 candle.
         all_bricks = renko.bricks
         if len(all_bricks) == 0:
             logger.info(f"⏳ [{symbol}] No bricks yet (brick_size={brick_size})")
